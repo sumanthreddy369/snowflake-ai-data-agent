@@ -1,0 +1,24 @@
+{
+  "name": "snowflake-card-transactions-sink",
+  "config": {
+    "connector.class": "com.snowflake.kafka.connector.SnowflakeSinkConnector",
+    "tasks.max": "1",
+    "topics": "card-transactions",
+    "snowflake.topic2table.map": "card-transactions:RAW_TRANSACTIONS",
+
+    "snowflake.url.name": "<your_account_locator>.snowflakecomputing.com:443",
+    "snowflake.user.name": "<kafka_connector_user>",
+    "snowflake.private.key": "<base64_private_key_no_headers>",
+    "snowflake.role.name": "LOADER",
+    "snowflake.database.name": "BANK_AGENT",
+    "snowflake.schema.name": "BRONZE",
+
+    "snowflake.ingestion.method": "SNOWPIPE_STREAMING",
+    "buffer.count.records": "1000",
+    "buffer.flush.time": "5",
+    "buffer.size.bytes": "5000000",
+
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "com.snowflake.kafka.connector.records.SnowflakeJsonConverter"
+  }
+}

@@ -17,7 +17,7 @@ lakehouse styles and both top regulated industries.
 
 | Step | What happens | Tool | Where |
 |---|---|---|---|
-| 1. Ingest | Raw data lands automatically | Snowpipe | [`sql/01_ingest/snowpipe_setup.sql`](sql/01_ingest/snowpipe_setup.sql) |
+| 1. Ingest | Raw data lands automatically | Snowpipe (file-based) or Kafka + Snowpipe Streaming (real-time) | [`sql/01_ingest/snowpipe_setup.sql`](sql/01_ingest/snowpipe_setup.sql), [`streaming/`](streaming/) |
 | 2. Bronze | Raw data lands untouched | Snowflake raw tables | [`sql/02_bronze/bronze_tables.sql`](sql/02_bronze/bronze_tables.sql) |
 | 3. Silver | Clean, dedupe, standardize | Streams + Tasks | [`sql/03_silver/streams_and_tasks.sql`](sql/03_silver/streams_and_tasks.sql) |
 | 4. Gold | Business-ready star schema | dbt | [`dbt/models/marts`](dbt/models/marts) |
@@ -48,10 +48,13 @@ snowflake-ai-data-agent/
 
 ## Setup order
 
-1. Run `sql/01_ingest` then `sql/02_bronze` to stand up the stage, pipe, and raw
-   tables. Point the external stage at your actual bucket/container and a real or
-   synthetic transactions dataset (e.g. Kaggle "Credit Card Fraud Detection",
-   "Bank Marketing", or a Sparkov-style synthetic transaction generator).
+1. Run `sql/02_bronze` to create the raw tables, then pick an ingest path:
+   - **Batch/file:** run `sql/01_ingest/snowpipe_setup.sql`, point the stage at
+     your bucket, and drop CSVs matching the Bronze schema.
+   - **Real-time (recommended):** follow [`streaming/README.md`](streaming/README.md)
+     to replay IBM's synthetic credit card transactions dataset through Kafka
+     into `RAW_TRANSACTIONS` via the Snowflake Kafka Connector (Snowpipe
+     Streaming) — this is the path that actually demonstrates "real-time."
 2. Run `sql/03_silver` to create the Silver schema, the Stream on Bronze, and the
    Task that merges changes in on a schedule.
 3. `cd dbt && dbt run` to build the Gold star schema from Silver (edit

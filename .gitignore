@@ -7,3 +7,5 @@ logs/
 *.pyc
 __pycache__/
 .DS_Store
+streaming/data/
+*.local.json
