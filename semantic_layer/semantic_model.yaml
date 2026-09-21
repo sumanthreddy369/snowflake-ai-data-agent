@@ -1,0 +1,140 @@
+name: retail_agent_semantic_model
+description: >
+  Semantic model over the RETAIL_AGENT.GOLD star schema, letting Cortex Analyst
+  answer plain-English questions about orders, customers, and products with
+  agreed-upon definitions for common business terms.
+
+tables:
+  - name: fct_orders
+    base_table:
+      database: RETAIL_AGENT
+      schema: GOLD
+      table: FCT_ORDERS
+    primary_key:
+      columns: [order_id]
+    dimensions:
+      - name: order_status
+        expr: order_status
+        data_type: varchar
+        description: "Current status of the order (e.g. PLACED, SHIPPED, DELIVERED)."
+      - name: order_date
+        expr: date_key
+        data_type: date
+        description: "Calendar date the order was placed."
+    time_dimensions:
+      - name: order_ts
+        expr: order_ts
+        data_type: timestamp
+        description: "Exact timestamp the order was placed."
+    facts:
+      - name: quantity
+        expr: quantity
+        data_type: number
+        description: "Number of units ordered."
+      - name: unit_price
+        expr: unit_price
+        data_type: number
+        description: "Price per unit at time of order."
+      - name: line_total
+        expr: line_total
+        data_type: number
+        description: "quantity * unit_price for this order line."
+    measures:
+      - name: revenue
+        expr: SUM(line_total)
+        data_type: number
+        description: >
+          Total revenue: the sum of line_total across all non-cancelled orders.
+          This is the agreed single definition of "revenue" for this agent —
+          always net of cancelled orders, never list price.
+      - name: order_count
+        expr: COUNT(DISTINCT order_id)
+        data_type: number
+        description: "Number of distinct orders."
+      - name: units_sold
+        expr: SUM(quantity)
+        data_type: number
+        description: "Total units sold across all order lines."
+
+  - name: dim_customers
+    base_table:
+      database: RETAIL_AGENT
+      schema: GOLD
+      table: DIM_CUSTOMERS
+    primary_key:
+      columns: [customer_id]
+    dimensions:
+      - name: full_name
+        expr: full_name
+        data_type: varchar
+      - name: region
+        expr: region
+        data_type: varchar
+        description: "Customer's home region, used for geographic breakdowns."
+    time_dimensions:
+      - name: signup_date
+        expr: signup_date
+        data_type: date
+    measures:
+      - name: active_users
+        expr: COUNT(DISTINCT customer_id)
+        data_type: number
+        description: >
+          "Active user" is defined here as a distinct customer with at least one
+          non-cancelled order in the filtered/questioned time window — i.e. this
+          measure is only meaningful when joined through fct_orders and filtered
+          by a date range. Document any change to this definition here first.
+
+  - name: dim_products
+    base_table:
+      database: RETAIL_AGENT
+      schema: GOLD
+      table: DIM_PRODUCTS
+    primary_key:
+      columns: [product_id]
+    dimensions:
+      - name: product_name
+        expr: product_name
+        data_type: varchar
+      - name: category
+        expr: category
+        data_type: varchar
+
+relationships:
+  - name: orders_to_customers
+    left_table: fct_orders
+    right_table: dim_customers
+    relationship_columns:
+      - left_column: customer_id
+        right_column: customer_id
+    join_type: left_outer
+    relationship_type: many_to_one
+
+  - name: orders_to_products
+    left_table: fct_orders
+    right_table: dim_products
+    relationship_columns:
+      - left_column: product_id
+        right_column: product_id
+    join_type: left_outer
+    relationship_type: many_to_one
+
+verified_queries:
+  - name: total_revenue_last_30_days
+    question: "What was our total revenue in the last 30 days?"
+    sql: >
+      SELECT SUM(line_total) AS revenue
+      FROM RETAIL_AGENT.GOLD.FCT_ORDERS
+      WHERE order_ts >= DATEADD('day', -30, CURRENT_DATE())
+        AND order_status != 'CANCELLED';
+    use_as_onboarding_question: true
+
+  - name: active_customers_by_region
+    question: "How many active customers do we have in each region this month?"
+    sql: >
+      SELECT c.region, COUNT(DISTINCT o.customer_id) AS active_customers
+      FROM RETAIL_AGENT.GOLD.FCT_ORDERS o
+      JOIN RETAIL_AGENT.GOLD.DIM_CUSTOMERS c ON o.customer_id = c.customer_id
+      WHERE DATE_TRUNC('month', o.order_ts) = DATE_TRUNC('month', CURRENT_DATE())
+      GROUP BY c.region
+      ORDER BY active_customers DESC;

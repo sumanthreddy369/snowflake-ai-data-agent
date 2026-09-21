@@ -1,0 +1,15 @@
+# Copy to ~/.dbt/profiles.yml and fill in your account details.
+# Never commit a real profiles.yml — it's already in .gitignore.
+retail_agent_gold:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: "<your_account_locator>"
+      user: "<your_user>"
+      password: "<your_password_or_use_key_pair_auth>"
+      role: TRANSFORMER
+      database: RETAIL_AGENT
+      warehouse: COMPUTE_WH
+      schema: GOLD
+      threads: 4

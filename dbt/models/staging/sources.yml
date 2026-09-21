@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: silver
+    database: RETAIL_AGENT
+    schema: SILVER
+    tables:
+      - name: orders
+      - name: customers
+      - name: products
