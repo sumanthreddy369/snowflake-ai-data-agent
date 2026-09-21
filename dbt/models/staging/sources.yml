@@ -2,9 +2,9 @@ version: 2
 
 sources:
   - name: silver
-    database: RETAIL_AGENT
+    database: BANK_AGENT
     schema: SILVER
     tables:
-      - name: orders
+      - name: transactions
       - name: customers
-      - name: products
+      - name: merchants

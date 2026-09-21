@@ -1,64 +1,68 @@
-name: retail_agent_semantic_model
+name: bank_agent_semantic_model
 description: >
-  Semantic model over the RETAIL_AGENT.GOLD star schema, letting Cortex Analyst
-  answer plain-English questions about orders, customers, and products with
-  agreed-upon definitions for common business terms.
+  Semantic model over the BANK_AGENT.GOLD star schema, letting Cortex Analyst
+  answer plain-English questions about card transactions, customers, and
+  merchants with agreed-upon definitions for common business terms like
+  "spend", "fraud rate", and "active customer".
 
 tables:
-  - name: fct_orders
+  - name: fct_transactions
     base_table:
-      database: RETAIL_AGENT
+      database: BANK_AGENT
       schema: GOLD
-      table: FCT_ORDERS
+      table: FCT_TRANSACTIONS
     primary_key:
-      columns: [order_id]
+      columns: [transaction_id]
     dimensions:
-      - name: order_status
-        expr: order_status
+      - name: transaction_status
+        expr: transaction_status
         data_type: varchar
-        description: "Current status of the order (e.g. PLACED, SHIPPED, DELIVERED)."
-      - name: order_date
+        description: "Status of the transaction (e.g. APPROVED, DECLINED, REVERSED)."
+      - name: is_fraud
+        expr: is_fraud
+        data_type: boolean
+        description: "Whether the transaction was flagged as fraudulent."
+      - name: transaction_date
         expr: date_key
         data_type: date
-        description: "Calendar date the order was placed."
+        description: "Calendar date the transaction occurred."
     time_dimensions:
-      - name: order_ts
-        expr: order_ts
+      - name: transaction_ts
+        expr: transaction_ts
         data_type: timestamp
-        description: "Exact timestamp the order was placed."
+        description: "Exact timestamp the transaction was authorized."
     facts:
-      - name: quantity
-        expr: quantity
+      - name: amount
+        expr: amount
         data_type: number
-        description: "Number of units ordered."
-      - name: unit_price
-        expr: unit_price
-        data_type: number
-        description: "Price per unit at time of order."
-      - name: line_total
-        expr: line_total
-        data_type: number
-        description: "quantity * unit_price for this order line."
+        description: "Transaction amount in USD."
     measures:
-      - name: revenue
-        expr: SUM(line_total)
+      - name: total_spend
+        expr: SUM(amount)
         data_type: number
         description: >
-          Total revenue: the sum of line_total across all non-cancelled orders.
-          This is the agreed single definition of "revenue" for this agent —
-          always net of cancelled orders, never list price.
-      - name: order_count
-        expr: COUNT(DISTINCT order_id)
+          Total spend: the sum of amount across all non-reversed transactions.
+          This is the agreed single definition of "spend" for this agent —
+          always net of reversed transactions.
+      - name: transaction_count
+        expr: COUNT(DISTINCT transaction_id)
         data_type: number
-        description: "Number of distinct orders."
-      - name: units_sold
-        expr: SUM(quantity)
+        description: "Number of distinct transactions."
+      - name: avg_transaction_amount
+        expr: AVG(amount)
         data_type: number
-        description: "Total units sold across all order lines."
+        description: "Average transaction amount."
+      - name: fraud_rate
+        expr: SUM(IFF(is_fraud, 1, 0)) / NULLIF(COUNT(DISTINCT transaction_id), 0)
+        data_type: number
+        description: >
+          "Fraud rate" is defined here as flagged transactions divided by total
+          transactions in the filtered window — never a count alone. Document
+          any change to this definition here first.
 
   - name: dim_customers
     base_table:
-      database: RETAIL_AGENT
+      database: BANK_AGENT
       schema: GOLD
       table: DIM_CUSTOMERS
     primary_key:
@@ -72,37 +76,42 @@ tables:
         data_type: varchar
         description: "Customer's home region, used for geographic breakdowns."
     time_dimensions:
-      - name: signup_date
-        expr: signup_date
+      - name: account_open_date
+        expr: account_open_date
         data_type: date
     measures:
-      - name: active_users
+      - name: active_customers
         expr: COUNT(DISTINCT customer_id)
         data_type: number
         description: >
-          "Active user" is defined here as a distinct customer with at least one
-          non-cancelled order in the filtered/questioned time window — i.e. this
-          measure is only meaningful when joined through fct_orders and filtered
-          by a date range. Document any change to this definition here first.
+          "Active customer" is defined here as a distinct customer with at least
+          one approved (non-declined, non-reversed) transaction in the
+          filtered/questioned time window — i.e. this measure is only meaningful
+          when joined through fct_transactions and filtered by a date range.
 
-  - name: dim_products
+  - name: dim_merchants
     base_table:
-      database: RETAIL_AGENT
+      database: BANK_AGENT
       schema: GOLD
-      table: DIM_PRODUCTS
+      table: DIM_MERCHANTS
     primary_key:
-      columns: [product_id]
+      columns: [merchant_id]
     dimensions:
-      - name: product_name
-        expr: product_name
+      - name: merchant_name
+        expr: merchant_name
         data_type: varchar
-      - name: category
-        expr: category
+      - name: mcc_category
+        expr: mcc_category
         data_type: varchar
+        description: "Merchant category, e.g. GROCERY, TRAVEL, ELECTRONICS."
+      - name: risk_tier
+        expr: risk_tier
+        data_type: varchar
+        description: "Merchant fraud-risk tier: LOW, MEDIUM, or HIGH."
 
 relationships:
-  - name: orders_to_customers
-    left_table: fct_orders
+  - name: transactions_to_customers
+    left_table: fct_transactions
     right_table: dim_customers
     relationship_columns:
       - left_column: customer_id
@@ -110,31 +119,43 @@ relationships:
     join_type: left_outer
     relationship_type: many_to_one
 
-  - name: orders_to_products
-    left_table: fct_orders
-    right_table: dim_products
+  - name: transactions_to_merchants
+    left_table: fct_transactions
+    right_table: dim_merchants
     relationship_columns:
-      - left_column: product_id
-        right_column: product_id
+      - left_column: merchant_id
+        right_column: merchant_id
     join_type: left_outer
     relationship_type: many_to_one
 
 verified_queries:
-  - name: total_revenue_last_30_days
-    question: "What was our total revenue in the last 30 days?"
+  - name: total_spend_last_30_days
+    question: "What was our total spend in the last 30 days?"
     sql: >
-      SELECT SUM(line_total) AS revenue
-      FROM RETAIL_AGENT.GOLD.FCT_ORDERS
-      WHERE order_ts >= DATEADD('day', -30, CURRENT_DATE())
-        AND order_status != 'CANCELLED';
+      SELECT SUM(amount) AS total_spend
+      FROM BANK_AGENT.GOLD.FCT_TRANSACTIONS
+      WHERE transaction_ts >= DATEADD('day', -30, CURRENT_DATE())
+        AND transaction_status != 'REVERSED';
     use_as_onboarding_question: true
+
+  - name: fraud_rate_by_merchant_category
+    question: "What is our fraud rate by merchant category this month?"
+    sql: >
+      SELECT m.mcc_category,
+             SUM(IFF(t.is_fraud, 1, 0)) / COUNT(DISTINCT t.transaction_id) AS fraud_rate
+      FROM BANK_AGENT.GOLD.FCT_TRANSACTIONS t
+      JOIN BANK_AGENT.GOLD.DIM_MERCHANTS m ON t.merchant_id = m.merchant_id
+      WHERE DATE_TRUNC('month', t.transaction_ts) = DATE_TRUNC('month', CURRENT_DATE())
+      GROUP BY m.mcc_category
+      ORDER BY fraud_rate DESC;
 
   - name: active_customers_by_region
     question: "How many active customers do we have in each region this month?"
     sql: >
-      SELECT c.region, COUNT(DISTINCT o.customer_id) AS active_customers
-      FROM RETAIL_AGENT.GOLD.FCT_ORDERS o
-      JOIN RETAIL_AGENT.GOLD.DIM_CUSTOMERS c ON o.customer_id = c.customer_id
-      WHERE DATE_TRUNC('month', o.order_ts) = DATE_TRUNC('month', CURRENT_DATE())
+      SELECT c.region, COUNT(DISTINCT t.customer_id) AS active_customers
+      FROM BANK_AGENT.GOLD.FCT_TRANSACTIONS t
+      JOIN BANK_AGENT.GOLD.DIM_CUSTOMERS c ON t.customer_id = c.customer_id
+      WHERE DATE_TRUNC('month', t.transaction_ts) = DATE_TRUNC('month', CURRENT_DATE())
+        AND t.transaction_status = 'APPROVED'
       GROUP BY c.region
       ORDER BY active_customers DESC;

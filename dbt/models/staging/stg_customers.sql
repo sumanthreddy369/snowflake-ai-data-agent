@@ -2,6 +2,7 @@ select
     customer_id,
     full_name,
     email,
-    signup_date,
+    ssn,
+    account_open_date,
     region
 from {{ source('silver', 'customers') }}

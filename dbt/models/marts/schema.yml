@@ -6,9 +6,9 @@ models:
       - name: customer_id
         tests: [unique, not_null]
 
-  - name: dim_products
+  - name: dim_merchants
     columns:
-      - name: product_id
+      - name: merchant_id
         tests: [unique, not_null]
 
   - name: dim_date
@@ -16,9 +16,9 @@ models:
       - name: date_key
         tests: [unique, not_null]
 
-  - name: fct_orders
+  - name: fct_transactions
     columns:
-      - name: order_id
+      - name: transaction_id
         tests: [unique, not_null]
       - name: customer_id
         tests:
@@ -26,9 +26,9 @@ models:
           - relationships:
               to: ref('dim_customers')
               field: customer_id
-      - name: product_id
+      - name: merchant_id
         tests:
           - not_null
           - relationships:
-              to: ref('dim_products')
-              field: product_id
+              to: ref('dim_merchants')
+              field: merchant_id

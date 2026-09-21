@@ -9,7 +9,7 @@ retail_agent_gold:
       user: "<your_user>"
       password: "<your_password_or_use_key_pair_auth>"
       role: TRANSFORMER
-      database: RETAIL_AGENT
+      database: BANK_AGENT
       warehouse: COMPUTE_WH
       schema: GOLD
       threads: 4
