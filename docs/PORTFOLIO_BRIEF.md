@@ -34,7 +34,7 @@ portfolio pipelines skip both.
    (IBM's ~24M-row synthetic credit card transactions dataset) through Kafka
    into Snowflake's Kafka Connector running in Snowpipe Streaming mode —
    exactly how banks load-test fraud pipelines before touching live data.
-4. **Pivoting to real-time stock market data (current direction)** — wanted
+4. **Pivoted to real-time stock market data (current, final domain)** — wanted
    genuinely *real* data, not synthetic, with rich variables and true
    real-time behavior. Real transaction-level bank data still isn't public,
    but live market data is: free, unauthenticated feeds (Alpaca's IEX feed)
@@ -81,7 +81,9 @@ Live Tables) instead of repeating the finance story twice.
 
 ## Repo
 
-https://github.com/sumanthreddy369/snowflake-ai-data-agent
+https://github.com/sumanthreddy369/snowflake-ai-data-agent — currently modeling
+real-time equities trades/bars (Alpaca feed), after two earlier pivots (retail
+→ bank transactions → market data) each documented in the commit history.
 
 ## What to ask ChatGPT for, using this brief
 
