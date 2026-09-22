@@ -1,10 +1,10 @@
--- Simple generated date spine covering observed transaction dates.
+-- Simple generated date spine covering observed bar dates.
 -- Swap for dbt-utils' date_spine() macro if the package is available.
 with bounds as (
     select
-        date_trunc('day', min(transaction_ts)) as min_date,
-        date_trunc('day', max(transaction_ts)) as max_date
-    from {{ ref('stg_transactions') }}
+        date_trunc('day', min(bar_ts)) as min_date,
+        date_trunc('day', max(bar_ts)) as max_date
+    from {{ ref('stg_bars') }}
 ),
 spine as (
     select

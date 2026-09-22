@@ -1,14 +1,9 @@
 version: 2
 
 models:
-  - name: dim_customers
+  - name: dim_symbols
     columns:
-      - name: customer_id
-        tests: [unique, not_null]
-
-  - name: dim_merchants
-    columns:
-      - name: merchant_id
+      - name: symbol
         tests: [unique, not_null]
 
   - name: dim_date
@@ -16,19 +11,24 @@ models:
       - name: date_key
         tests: [unique, not_null]
 
-  - name: fct_transactions
+  - name: fct_trades
     columns:
-      - name: transaction_id
+      - name: trade_id
         tests: [unique, not_null]
-      - name: customer_id
+      - name: symbol
         tests:
           - not_null
           - relationships:
-              to: ref('dim_customers')
-              field: customer_id
-      - name: merchant_id
+              to: ref('dim_symbols')
+              field: symbol
+
+  - name: fct_bars
+    columns:
+      - name: symbol
         tests:
           - not_null
           - relationships:
-              to: ref('dim_merchants')
-              field: merchant_id
+              to: ref('dim_symbols')
+              field: symbol
+      - name: bar_ts
+        tests: [not_null]

@@ -1,16 +1,16 @@
 {
-  "name": "snowflake-card-transactions-sink",
+  "name": "snowflake-market-data-sink",
   "config": {
     "connector.class": "com.snowflake.kafka.connector.SnowflakeSinkConnector",
-    "tasks.max": "1",
-    "topics": "card-transactions",
-    "snowflake.topic2table.map": "card-transactions:RAW_TRANSACTIONS",
+    "tasks.max": "2",
+    "topics": "market-trades,market-bars",
+    "snowflake.topic2table.map": "market-trades:RAW_TRADES,market-bars:RAW_BARS",
 
     "snowflake.url.name": "<your_account_locator>.snowflakecomputing.com:443",
     "snowflake.user.name": "<kafka_connector_user>",
     "snowflake.private.key": "<base64_private_key_no_headers>",
     "snowflake.role.name": "LOADER",
-    "snowflake.database.name": "BANK_AGENT",
+    "snowflake.database.name": "MARKET_AGENT",
     "snowflake.schema.name": "BRONZE",
 
     "snowflake.ingestion.method": "SNOWPIPE_STREAMING",

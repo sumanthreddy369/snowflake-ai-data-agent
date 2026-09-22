@@ -8,5 +8,7 @@ logs/
 __pycache__/
 .DS_Store
 streaming/data/*
-!streaming/data/sample_transactions.csv
+!streaming/data/sample_bars.csv
+!streaming/data/sample_trades.csv
+!streaming/data/sample_symbols.csv
 *.local.json

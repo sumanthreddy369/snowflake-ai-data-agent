@@ -1,161 +1,191 @@
-name: bank_agent_semantic_model
+name: market_agent_semantic_model
 description: >
-  Semantic model over the BANK_AGENT.GOLD star schema, letting Cortex Analyst
-  answer plain-English questions about card transactions, customers, and
-  merchants with agreed-upon definitions for common business terms like
-  "spend", "fraud rate", and "active customer".
+  Semantic model over the MARKET_AGENT.GOLD star schema, letting Cortex Analyst
+  answer plain-English questions about real-time equities trades and minute
+  bars with agreed-upon definitions for "return", "volatility", and "volume".
+  Rows visible to this model are already subject to the delayed-data row
+  access policy in sql/07_governance — see that file before assuming any
+  answer reflects true real-time prices.
 
 tables:
-  - name: fct_transactions
+  - name: fct_bars
     base_table:
-      database: BANK_AGENT
+      database: MARKET_AGENT
       schema: GOLD
-      table: FCT_TRANSACTIONS
-    primary_key:
-      columns: [transaction_id]
+      table: FCT_BARS
     dimensions:
-      - name: transaction_status
-        expr: transaction_status
+      - name: symbol
+        expr: symbol
         data_type: varchar
-        description: "Status of the transaction (e.g. APPROVED, DECLINED, REVERSED)."
-      - name: is_fraud
-        expr: is_fraud
-        data_type: boolean
-        description: "Whether the transaction was flagged as fraudulent."
-      - name: transaction_date
+        description: "Ticker symbol, e.g. AAPL."
+      - name: bar_date
         expr: date_key
         data_type: date
-        description: "Calendar date the transaction occurred."
+        description: "Calendar date the bar occurred."
     time_dimensions:
-      - name: transaction_ts
-        expr: transaction_ts
+      - name: bar_ts
+        expr: bar_ts
         data_type: timestamp
-        description: "Exact timestamp the transaction was authorized."
+        description: "Start timestamp of the 1-minute bar."
     facts:
-      - name: amount
-        expr: amount
+      - name: open
+        expr: open
         data_type: number
-        description: "Transaction amount in USD."
+      - name: high
+        expr: high
+        data_type: number
+      - name: low
+        expr: low
+        data_type: number
+      - name: close
+        expr: close
+        data_type: number
+      - name: volume
+        expr: volume
+        data_type: number
+      - name: bar_return
+        expr: bar_return
+        data_type: number
+        description: "(close - open) / open for this single bar."
     measures:
-      - name: total_spend
-        expr: SUM(amount)
+      - name: total_volume
+        expr: SUM(volume)
+        data_type: number
+        description: "Total shares traded across the filtered bars."
+      - name: avg_close
+        expr: AVG(close)
+        data_type: number
+        description: "Average closing price across the filtered bars."
+      - name: vwap
+        expr: SUM(vwap * volume) / NULLIF(SUM(volume), 0)
         data_type: number
         description: >
-          Total spend: the sum of amount across all non-reversed transactions.
-          This is the agreed single definition of "spend" for this agent —
-          always net of reversed transactions.
-      - name: transaction_count
-        expr: COUNT(DISTINCT transaction_id)
-        data_type: number
-        description: "Number of distinct transactions."
-      - name: avg_transaction_amount
-        expr: AVG(amount)
-        data_type: number
-        description: "Average transaction amount."
-      - name: fraud_rate
-        expr: SUM(IFF(is_fraud, 1, 0)) / NULLIF(COUNT(DISTINCT transaction_id), 0)
+          "VWAP" (volume-weighted average price) is defined here as the
+          volume-weighted mean of each bar's own vwap field — never a plain
+          average of price, which would ignore how much actually traded at
+          each level.
+      - name: period_return
+        expr: (MAX_BY(close, bar_ts) - MIN_BY(open, bar_ts)) / NULLIF(MIN_BY(open, bar_ts), 0)
         data_type: number
         description: >
-          "Fraud rate" is defined here as flagged transactions divided by total
-          transactions in the filtered window — never a count alone. Document
-          any change to this definition here first.
+          "Return" over a filtered window is defined here as the last close
+          minus the first open, divided by the first open — never an average
+          of per-bar returns, which would not reconstruct the actual
+          start-to-end price move.
+      - name: volatility
+        expr: AVG(rolling_volatility_30)
+        data_type: number
+        description: >
+          "Volatility" is defined here as the average of each bar's trailing
+          30-bar return standard deviation (computed once in dbt, see
+          fct_bars.sql) — never a single global stddev of the filtered rows,
+          which would blend calm and turbulent periods together.
 
-  - name: dim_customers
+  - name: fct_trades
     base_table:
-      database: BANK_AGENT
+      database: MARKET_AGENT
       schema: GOLD
-      table: DIM_CUSTOMERS
+      table: FCT_TRADES
     primary_key:
-      columns: [customer_id]
+      columns: [trade_id]
     dimensions:
-      - name: full_name
-        expr: full_name
+      - name: symbol
+        expr: symbol
         data_type: varchar
-      - name: region
-        expr: region
+      - name: exchange_code
+        expr: exchange_code
         data_type: varchar
-        description: "Customer's home region, used for geographic breakdowns."
     time_dimensions:
-      - name: account_open_date
-        expr: account_open_date
-        data_type: date
-    measures:
-      - name: active_customers
-        expr: COUNT(DISTINCT customer_id)
+      - name: trade_ts
+        expr: trade_ts
+        data_type: timestamp
+    facts:
+      - name: price
+        expr: price
         data_type: number
-        description: >
-          "Active customer" is defined here as a distinct customer with at least
-          one approved (non-declined, non-reversed) transaction in the
-          filtered/questioned time window — i.e. this measure is only meaningful
-          when joined through fct_transactions and filtered by a date range.
+      - name: size
+        expr: size
+        data_type: number
+      - name: notional
+        expr: notional
+        data_type: number
+        description: "price * size for this single trade print."
+    measures:
+      - name: trade_count
+        expr: COUNT(DISTINCT trade_id)
+        data_type: number
+      - name: total_notional
+        expr: SUM(notional)
+        data_type: number
+        description: "Total dollar value traded across the filtered trades."
+      - name: avg_trade_size
+        expr: AVG(size)
+        data_type: number
 
-  - name: dim_merchants
+  - name: dim_symbols
     base_table:
-      database: BANK_AGENT
+      database: MARKET_AGENT
       schema: GOLD
-      table: DIM_MERCHANTS
+      table: DIM_SYMBOLS
     primary_key:
-      columns: [merchant_id]
+      columns: [symbol]
     dimensions:
-      - name: merchant_name
-        expr: merchant_name
+      - name: company_name
+        expr: company_name
         data_type: varchar
-      - name: mcc_category
-        expr: mcc_category
+      - name: sector
+        expr: sector
         data_type: varchar
-        description: "Merchant category, e.g. GROCERY, TRAVEL, ELECTRONICS."
-      - name: risk_tier
-        expr: risk_tier
+      - name: exchange
+        expr: exchange
         data_type: varchar
-        description: "Merchant fraud-risk tier: LOW, MEDIUM, or HIGH."
 
 relationships:
-  - name: transactions_to_customers
-    left_table: fct_transactions
-    right_table: dim_customers
+  - name: bars_to_symbols
+    left_table: fct_bars
+    right_table: dim_symbols
     relationship_columns:
-      - left_column: customer_id
-        right_column: customer_id
+      - left_column: symbol
+        right_column: symbol
     join_type: left_outer
     relationship_type: many_to_one
 
-  - name: transactions_to_merchants
-    left_table: fct_transactions
-    right_table: dim_merchants
+  - name: trades_to_symbols
+    left_table: fct_trades
+    right_table: dim_symbols
     relationship_columns:
-      - left_column: merchant_id
-        right_column: merchant_id
+      - left_column: symbol
+        right_column: symbol
     join_type: left_outer
     relationship_type: many_to_one
 
 verified_queries:
-  - name: total_spend_last_30_days
-    question: "What was our total spend in the last 30 days?"
+  - name: todays_return_by_symbol
+    question: "What was today's return for AAPL?"
     sql: >
-      SELECT SUM(amount) AS total_spend
-      FROM BANK_AGENT.GOLD.FCT_TRANSACTIONS
-      WHERE transaction_ts >= DATEADD('day', -30, CURRENT_DATE())
-        AND transaction_status != 'REVERSED';
+      SELECT symbol,
+             (MAX_BY(close, bar_ts) - MIN_BY(open, bar_ts)) / NULLIF(MIN_BY(open, bar_ts), 0) AS period_return
+      FROM MARKET_AGENT.GOLD.FCT_BARS
+      WHERE symbol = 'AAPL' AND date_key = CURRENT_DATE()
+      GROUP BY symbol;
     use_as_onboarding_question: true
 
-  - name: fraud_rate_by_merchant_category
-    question: "What is our fraud rate by merchant category this month?"
+  - name: highest_volatility_symbols_today
+    question: "Which symbols were most volatile today?"
     sql: >
-      SELECT m.mcc_category,
-             SUM(IFF(t.is_fraud, 1, 0)) / COUNT(DISTINCT t.transaction_id) AS fraud_rate
-      FROM BANK_AGENT.GOLD.FCT_TRANSACTIONS t
-      JOIN BANK_AGENT.GOLD.DIM_MERCHANTS m ON t.merchant_id = m.merchant_id
-      WHERE DATE_TRUNC('month', t.transaction_ts) = DATE_TRUNC('month', CURRENT_DATE())
-      GROUP BY m.mcc_category
-      ORDER BY fraud_rate DESC;
+      SELECT symbol, AVG(rolling_volatility_30) AS volatility
+      FROM MARKET_AGENT.GOLD.FCT_BARS
+      WHERE date_key = CURRENT_DATE()
+      GROUP BY symbol
+      ORDER BY volatility DESC
+      LIMIT 10;
 
-  - name: active_customers_by_region
-    question: "How many active customers do we have in each region this month?"
+  - name: total_volume_by_sector
+    question: "What was total trading volume by sector today?"
     sql: >
-      SELECT c.region, COUNT(DISTINCT t.customer_id) AS active_customers
-      FROM BANK_AGENT.GOLD.FCT_TRANSACTIONS t
-      JOIN BANK_AGENT.GOLD.DIM_CUSTOMERS c ON t.customer_id = c.customer_id
-      WHERE DATE_TRUNC('month', t.transaction_ts) = DATE_TRUNC('month', CURRENT_DATE())
-        AND t.transaction_status = 'APPROVED'
-      GROUP BY c.region
-      ORDER BY active_customers DESC;
+      SELECT s.sector, SUM(b.volume) AS total_volume
+      FROM MARKET_AGENT.GOLD.FCT_BARS b
+      JOIN MARKET_AGENT.GOLD.DIM_SYMBOLS s ON b.symbol = s.symbol
+      WHERE b.date_key = CURRENT_DATE()
+      GROUP BY s.sector
+      ORDER BY total_volume DESC;

@@ -1,11 +1,13 @@
 """
-Generates a small, schema-accurate stand-in for IBM's synthetic credit card
-transactions dataset (Kaggle/TabFormer), so the pipeline can be run end-to-end
-without needing a Kaggle account or a multi-gigabyte download.
+Generates a small, schema-accurate sample of trades and minute bars, so the
+pipeline can be run end-to-end without an Alpaca account or waiting for market
+hours. Prices follow a simple random walk per symbol across one trading day
+(9:30-16:00 ET, 390 minutes); trades are a handful of prints per bar clustered
+around that bar's OHLC range.
 
-Swap this file for the real dataset (see streaming/README.md) once you want
-realistic fraud patterns and true 24M-row scale; the column layout matches
-exactly, so kafka_producer_replay.py needs no changes either way.
+Swap this for streaming/alpaca_stream_producer.py once you have a free Alpaca
+API key and want genuinely live data; the column layout is identical either
+way, so nothing downstream needs to change.
 """
 
 import csv
@@ -14,64 +16,87 @@ from datetime import datetime, timedelta
 
 random.seed(42)
 
-N_ROWS = 5000
-N_USERS = 200
-N_MERCHANTS = 60
-DAYS_BACK = 30
+SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]
+START_PRICES = {"AAPL": 225.0, "MSFT": 430.0, "GOOGL": 175.0, "AMZN": 190.0, "TSLA": 250.0}
+MARKET_OPEN = datetime.now().replace(hour=9, minute=30, second=0, microsecond=0)
+BAR_MINUTES = 390  # one trading day, 9:30-16:00
+TRADES_PER_BAR = 4
 
-MCC_CODES = ["5411", "5812", "5541", "4899", "5732", "5311", "4111", "5942", "7995", "5999"]
-STATES = ["NY", "CA", "TX", "IL", "WA", "MI", "FL", "OH", "GA", "PA"]
 
-merchants = [
-    {
-        "name": str(random.randint(-9_999_999_999, -1_000_000_000)),  # IBM dataset uses signed int merchant ids
-        "city": random.choice(["New York", "Los Angeles", "Chicago", "Houston", "Seattle", "Detroit"]),
-        "state": random.choice(STATES),
-        "zip": f"{random.randint(10000, 99999)}",
-        "mcc": random.choice(MCC_CODES),
-    }
-    for _ in range(N_MERCHANTS)
-]
+def generate_bars_and_trades():
+    bars, trades = [], []
+    trade_id = 0
 
-end = datetime.now()
-start = end - timedelta(days=DAYS_BACK)
+    for symbol in SYMBOLS:
+        price = START_PRICES[symbol]
+        for minute in range(BAR_MINUTES):
+            bar_start = MARKET_OPEN + timedelta(minutes=minute)
+            open_price = price
+            prints = [open_price]
+            for _ in range(TRADES_PER_BAR):
+                price = max(0.01, price + random.gauss(0, price * 0.001))
+                prints.append(price)
+            close_price = prints[-1]
+            high = max(prints)
+            low = min(prints)
+            volume = random.randint(500, 50000)
 
-rows = []
-for _ in range(N_ROWS):
-    user = random.randint(0, N_USERS - 1)
-    card = random.randint(0, 2)
-    ts = start + (end - start) * random.random()
-    merchant = random.choice(merchants)
-    amount = round(random.lognormvariate(3.2, 1.1), 2)  # skews toward small purchases, occasional large ones
-    is_fraud = random.random() < 0.01
-    has_error = random.random() < 0.02
+            bars.append(
+                {
+                    "symbol": symbol,
+                    "bar_ts": bar_start.isoformat(),
+                    "open": round(open_price, 4),
+                    "high": round(high, 4),
+                    "low": round(low, 4),
+                    "close": round(close_price, 4),
+                    "volume": volume,
+                    "vwap": round(sum(prints) / len(prints), 4),
+                    "trade_count": TRADES_PER_BAR,
+                }
+            )
 
-    rows.append(
-        {
-            "User": user,
-            "Card": card,
-            "Year": ts.year,
-            "Month": ts.month,
-            "Day": ts.day,
-            "Time": ts.strftime("%H:%M"),
-            "Amount": f"${amount:.2f}",
-            "Use Chip": random.choice(["Chip Transaction", "Swipe Transaction", "Online Transaction"]),
-            "Merchant Name": merchant["name"],
-            "Merchant City": merchant["city"],
-            "Merchant State": merchant["state"],
-            "Zip": merchant["zip"],
-            "MCC": merchant["mcc"],
-            "Errors?": "Bad PIN" if has_error else "",
-            "Is Fraud?": "Yes" if is_fraud else "No",
-        }
-    )
+            for i, p in enumerate(prints[1:], start=1):
+                trade_id += 1
+                trade_ts = bar_start + timedelta(seconds=(60 // TRADES_PER_BAR) * i)
+                trades.append(
+                    {
+                        "trade_id": trade_id,
+                        "symbol": symbol,
+                        "price": round(p, 4),
+                        "size": random.choice([10, 25, 50, 100, 200, 500]),
+                        "exchange_code": "V",
+                        "conditions": "@",
+                        "trade_ts": trade_ts.isoformat(),
+                    }
+                )
 
-rows.sort(key=lambda r: (r["Year"], r["Month"], r["Day"], r["Time"]))
+    bars.sort(key=lambda r: r["bar_ts"])
+    trades.sort(key=lambda r: r["trade_ts"])
+    return bars, trades
 
-out_path = "data/sample_transactions.csv"
-with open(out_path, "w", newline="") as f:
-    writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-    writer.writeheader()
-    writer.writerows(rows)
 
-print(f"Wrote {len(rows)} rows to {out_path}")
+def write_csv(path, rows):
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Wrote {len(rows)} rows to {path}")
+
+
+def write_symbols_csv(path):
+    sectors = {"AAPL": "Technology", "MSFT": "Technology", "GOOGL": "Communication Services",
+               "AMZN": "Consumer Discretionary", "TSLA": "Consumer Discretionary"}
+    names = {"AAPL": "Apple Inc.", "MSFT": "Microsoft Corp.", "GOOGL": "Alphabet Inc.",
+             "AMZN": "Amazon.com Inc.", "TSLA": "Tesla Inc."}
+    rows = [
+        {"symbol": s, "company_name": names[s], "sector": sectors[s], "exchange": "NASDAQ", "is_active": "true"}
+        for s in SYMBOLS
+    ]
+    write_csv(path, rows)
+
+
+if __name__ == "__main__":
+    bars, trades = generate_bars_and_trades()
+    write_csv("data/sample_bars.csv", bars)
+    write_csv("data/sample_trades.csv", trades)
+    write_symbols_csv("data/sample_symbols.csv")

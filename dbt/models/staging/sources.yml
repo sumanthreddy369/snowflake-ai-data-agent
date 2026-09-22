@@ -2,9 +2,9 @@ version: 2
 
 sources:
   - name: silver
-    database: BANK_AGENT
+    database: MARKET_AGENT
     schema: SILVER
     tables:
-      - name: transactions
-      - name: customers
-      - name: merchants
+      - name: trades
+      - name: bars
+      - name: symbols
