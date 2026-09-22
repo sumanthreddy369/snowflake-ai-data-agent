@@ -60,7 +60,7 @@ Live Tables) instead of repeating the finance story twice.
 | 4. Gold | Business-ready star schema (price/volume/return facts) | dbt |
 | 5. Semantic Layer | Define what "return," "volatility," "volume" mean | Cortex Analyst YAML |
 | 6. Agent | Ask questions in plain English | Cortex Analyst |
-| 7. Governance | Control who/what can access data | RBAC + Data Masking |
+| 7. Governance | Control who/what can access real-time vs. delayed data | RBAC + Row Access Policy |
 | 8. Validate | Check the agent's answers are correct | Manual SQL comparison |
 
 ## Architecture reasoning worth quoting
@@ -72,9 +72,12 @@ Live Tables) instead of repeating the finance story twice.
   underlying architecture — and how much you configure vs. code — is
   genuinely different. This contrast is deliberate, to demonstrate range
   across both lakehouse philosophies.
-- **Governance is not decorative**: the `ANALYST_AGENT` role that Cortex
-  Analyst queries as never receives the `PII_UNMASKED` role — the AI agent
-  should never see raw sensitive fields, only aggregate/derived ones.
+- **Governance is not decorative**: market data has no customer PII, so
+  governance here models real market-data *licensing* instead of masking —
+  a Row Access Policy means the `ANALYST_AGENT` role Cortex Analyst queries as
+  only ever sees trades/bars that are 15+ minutes old, unless explicitly
+  granted the `REALTIME_DESK` role. This mirrors how real exchanges/vendors
+  gate delayed vs. real-time quote entitlements.
 - **Validation is a discipline, not a one-off**: every `verified_query` in the
   semantic model has a hand-written SQL twin in `sql/08_validation/`, so any
   answer the agent gives can be independently checked.
