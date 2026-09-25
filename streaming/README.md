@@ -1,9 +1,17 @@
 # Real-time ingestion
 
 `sql/01_ingest/snowpipe_setup.sql` covers **batch backfill**: historical bars
-and the symbol reference table, loaded as files. This folder covers the
-**live** path: real-time trades and minute bars from Alpaca's free market
-data feed, flowing through Kafka into Snowflake via Snowpipe Streaming.
+and the symbol reference table, loaded as files from Google Cloud Storage
+(chosen over the more common S3 pattern to diversify cloud experience —
+Snowflake's GCS storage integration is structurally the same, just a
+different auth model underneath). This folder covers the **live** path:
+real-time trades and minute bars from Alpaca's free market data feed,
+flowing through Kafka into Snowflake via Snowpipe Streaming.
+
+Every record in this folder — live or offline — is validated against a
+shared Pydantic contract in [`schemas.py`](schemas.py) before it's sent
+anywhere, so a malformed message fails loudly here instead of silently
+corrupting Bronze.
 
 ## Two ways to run it
 
@@ -27,7 +35,22 @@ data feed, flowing through Kafka into Snowflake via Snowpipe Streaming.
 
 Both scripts publish to the same two topics (`market-trades`, `market-bars`),
 so nothing downstream — the Kafka Connector, Bronze, Silver, Gold — needs to
-know or care which one is running.
+know or care which one is running. The live producer also retries a dropped
+websocket connection with exponential backoff (`tenacity`) instead of dying,
+and both scripts emit structured log lines instead of bare `print()`.
+
+## Batch backfill
+
+[`backfill_historical.py`](backfill_historical.py) is the batch counterpart:
+it concurrently (`asyncio` + `httpx`, one task per symbol) pulls historical
+daily bars and asset metadata from Alpaca's REST API and writes CSVs matching
+the Bronze schema, ready to upload to the GCS paths in
+`sql/01_ingest/snowpipe_setup.sql`:
+
+```bash
+ALPACA_API_KEY=... ALPACA_API_SECRET=... python backfill_historical.py \
+  --start 2026-01-01 --end 2026-09-01
+```
 
 ## Why this matters (Snowpipe vs Snowpipe Streaming vs Databricks)
 
@@ -46,7 +69,7 @@ you own vs. configure — is genuinely different.
 
 ## Setup
 
-1. `pip install kafka-python websockets` and run a local Kafka broker (e.g.
+1. `pip install -r ../requirements.txt` and run a local Kafka broker (e.g.
    `docker run -p 9092:9092 apache/kafka`).
 2. Test with the offline sample first:
    `python replay_sample_data.py --limit 200 --speedup 300`

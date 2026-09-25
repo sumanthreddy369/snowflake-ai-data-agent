@@ -1,0 +1,9 @@
+# streaming/ (Steps 1 & the offline fallback)
+kafka-python
+websockets
+pydantic>=2
+tenacity
+httpx
+
+# agent/ (Step 6, instrumented Cortex Analyst client)
+langfuse

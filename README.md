@@ -20,6 +20,14 @@ covers healthcare instead, to diversify the portfolio across two regulated
 industries and Databricks' actual differentiators (unstructured data, native
 streaming, Delta Live Tables).
 
+Cloud storage runs on **Google Cloud Storage** rather than S3, deliberately
+different from other projects in this portfolio. The Python pieces
+(`streaming/`, `agent/`) also reuse patterns from those other projects —
+Pydantic contracts, `tenacity` retries, `httpx`/`asyncio` for concurrent API
+calls, structured logging, and Langfuse tracing around the one LLM-adjacent
+call this project makes (Cortex Analyst) — so the stack is consistent across
+the portfolio even where the domain and cloud provider differ.
+
 ## Pipeline
 
 | Step | What happens | Tool | Where |
@@ -44,9 +52,14 @@ snowflake-ai-data-agent/
 │   ├── 07_governance/rbac_and_masking.sql  # roles, grants, delayed-data row access policy
 │   └── 08_validation/validation_queries.sql
 ├── streaming/                              # live path: Alpaca -> Kafka -> Snowpipe Streaming
-│   ├── alpaca_stream_producer.py
+│   ├── schemas.py                          # shared Pydantic contracts for trades/bars/symbols
+│   ├── alpaca_stream_producer.py           # live feed (tenacity retries, structured logging)
 │   ├── generate_sample_data.py / replay_sample_data.py  # offline fallback, no account needed
+│   ├── backfill_historical.py              # async/httpx batch backfill -> GCS -> Snowpipe
 │   └── snowflake_kafka_connector.json
+├── agent/                                  # instrumented Cortex Analyst REST client
+│   ├── cortex_client.py                    # httpx + tenacity + Langfuse tracing
+│   └── schemas.py
 ├── dbt/
 │   ├── dbt_project.yml
 │   ├── profiles.yml.example
@@ -55,6 +68,7 @@ snowflake-ai-data-agent/
 │       └── marts/       # Gold star schema (dim_symbols, dim_date, fct_trades, fct_bars)
 ├── semantic_layer/
 │   └── semantic_model.yaml                 # Cortex Analyst semantic model
+├── requirements.txt
 └── docs/
     └── PORTFOLIO_BRIEF.md                  # full reasoning history, for writeups/resume
 ```
@@ -74,7 +88,9 @@ snowflake-ai-data-agent/
 6. Run `sql/07_governance` to apply the delayed-data row access policy and
    restrict roles before opening the agent up to real users — the
    ANALYST_AGENT role should never see true real-time prices.
-7. Ask the agent a question, then run the matching query in
+7. Ask the agent a question in Snowsight, or via
+   [`agent/cortex_client.py`](agent/cortex_client.py) if you want every query
+   traced through Langfuse; then run the matching query in
    `sql/08_validation/validation_queries.sql` and diff the numbers by hand.
 
 ## Status

@@ -77,9 +77,12 @@ write-up because it shows engineering judgment, not just a finished result:
    single global stddev that would blend calm and turbulent periods together;
    "VWAP" is volume-weighted, never a plain average of price.
 6. **Agent** — Cortex Analyst, Snowflake's managed NL-to-SQL product, pointed
-   at the Gold tables through that semantic model. No custom code here by
+   at the Gold tables through that semantic model. No custom agent logic by
    design — the differentiator in this project is what feeds the agent, not
-   the agent itself.
+   the agent itself — but every question sent to it optionally goes through
+   `agent/cortex_client.py`, a thin `httpx` wrapper that traces the call
+   through Langfuse (question, latency, generated SQL), giving this
+   no-code agent the same observability discipline as a hand-coded one.
 7. **Governance** — market data carries no customer PII, so instead of
    masking, governance here models real market-data *licensing*: a **Row
    Access Policy** means any role without the `REALTIME_DESK` entitlement —
@@ -110,18 +113,31 @@ for full market coverage.
 
 Snowflake (Snowpipe, Snowpipe Streaming, Streams & Tasks, Row Access
 Policies, RBAC, Cortex Analyst), dbt, Apache Kafka (Kafka Connect Snowflake
-Sink connector), Python (`kafka-python`, `websockets`), Alpaca Markets API.
+Sink connector), **Google Cloud Storage** (deliberately chosen over the more
+common S3 pattern, to diversify cloud experience across the portfolio),
+Python (`kafka-python`, `websockets`, `httpx`, `asyncio`, `pydantic`,
+`tenacity`), Langfuse (tracing every Cortex Analyst call), Alpaca Markets API.
+
+Reused deliberately from other projects in this portfolio, for stack
+consistency: Pydantic (typed contracts for every record the pipeline moves —
+`streaming/schemas.py`, `agent/schemas.py`), `tenacity` (retry with backoff on
+the live websocket connection and outbound API calls), `httpx` + `asyncio`
+(concurrent per-symbol historical backfill in `backfill_historical.py`),
+structured logging, and Langfuse (wrapping the one LLM-adjacent call in this
+project — the Cortex Analyst REST client in `agent/`).
 
 ## Current status — honestly
 
-Scaffolded and pushed: 28 files, 8 commits, public at
+Scaffolded and pushed, public at
 https://github.com/sumanthreddy369/snowflake-ai-data-agent. What's actually
-been verified: the offline sample-data generator runs and produces
-schema-correct output (checked in-session), and the replay script's CSV
-parsing/sorting logic was sanity-checked against that output. What has
-**not** been run yet: no live Snowflake account, no live Kafka broker, and no
-live Alpaca connection have been exercised end-to-end — the SQL and dbt
-models are structurally complete and internally consistent (dbt's built-in
+been verified: the offline sample-data generator runs, produces
+timezone-correct (UTC) output, and every row passes Pydantic validation
+against `schemas.py` (checked in-session); the replay script's parsing/sorting
+was sanity-checked against that output; all Python files compile and import
+cleanly. What has **not** been run yet: no live Snowflake account, no live
+Kafka broker, no live Alpaca connection, no live GCS bucket, and no live
+Langfuse project have been exercised end-to-end — the SQL and dbt models are
+structurally complete and internally consistent (dbt's built-in
 `unique`/`not_null`/`relationships` tests cover the Gold schema), but that's
 the only automated test coverage that exists right now. There's no pytest
 suite and no CI, unlike Project 2 — that's a clear gap worth closing before

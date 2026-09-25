@@ -1,6 +1,6 @@
 symbol,company_name,sector,exchange,is_active
-AAPL,Apple Inc.,Technology,NASDAQ,true
-MSFT,Microsoft Corp.,Technology,NASDAQ,true
-GOOGL,Alphabet Inc.,Communication Services,NASDAQ,true
-AMZN,Amazon.com Inc.,Consumer Discretionary,NASDAQ,true
-TSLA,Tesla Inc.,Consumer Discretionary,NASDAQ,true
+AAPL,Apple Inc.,Technology,NASDAQ,True
+MSFT,Microsoft Corp.,Technology,NASDAQ,True
+GOOGL,Alphabet Inc.,Communication Services,NASDAQ,True
+AMZN,Amazon.com Inc.,Consumer Discretionary,NASDAQ,True
+TSLA,Tesla Inc.,Consumer Discretionary,NASDAQ,True
