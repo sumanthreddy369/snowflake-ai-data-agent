@@ -19,13 +19,47 @@ SNOWFLAKE_PAT, CORTEX_SEMANTIC_MODEL_FILE (stage path to semantic_model.yaml)
 """
 
 import argparse
+import logging
 import os
 
 import httpx
+import snowflake.connector
 from langfuse import observe
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from schemas import CortexAnalystRequest, CortexAnalystResponse
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger("cortex_client")
+
+
+def _write_audit_log(question: str, response: "CortexAnalystResponse") -> None:
+    # Guardrail: every question gets logged to an append-only table
+    # (sql/09_guardrails) before this function returns. A failure here is
+    # logged loudly but never raised -- audit logging should never be the
+    # reason a real user-facing query fails, but a silent audit gap is its
+    # own kind of incident, hence the ERROR-level log rather than a warning.
+    try:
+        conn = snowflake.connector.connect(
+            account=os.environ["SNOWFLAKE_ACCOUNT"],
+            user=os.environ["SNOWFLAKE_USER"],
+            password=os.environ["SNOWFLAKE_PAT"],
+            warehouse=os.environ.get("SNOWFLAKE_WAREHOUSE", "ANALYST_WH"),
+            role=os.environ.get("SNOWFLAKE_ROLE", "ANALYST_AGENT"),
+        )
+        try:
+            conn.cursor().execute(
+                """
+                INSERT INTO MARKET_AGENT.GOVERNANCE.AGENT_QUERY_AUDIT_LOG
+                    (question, generated_sql, request_id, is_ambiguous)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (question, response.sql, response.request_id, response.is_ambiguous),
+            )
+        finally:
+            conn.close()
+    except Exception:
+        logger.exception("failed to write audit log entry for question: %s", question)
 
 
 def _headers() -> dict:
@@ -68,13 +102,15 @@ def ask_cortex_analyst(question: str) -> CortexAnalystResponse:
     sql = next((c["statement"] for c in content if c.get("type") == "sql"), None)
     suggestion = next((c for c in content if c.get("type") == "suggestion"), None)
 
-    return CortexAnalystResponse(
+    result = CortexAnalystResponse(
         request_id=request_id,
         text=text,
         sql=sql,
         suggestions=suggestion.get("suggestions") if suggestion else None,
         is_ambiguous=suggestion is not None,
     )
+    _write_audit_log(question, result)
+    return result
 
 
 def main():

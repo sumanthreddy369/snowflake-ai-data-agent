@@ -19,6 +19,15 @@ GROUP BY symbol
 ORDER BY volatility DESC
 LIMIT 10;
 
+-- Mirrors "suspect_bars_today" -- the circuit-breaker monitoring query.
+-- A nonzero result isn't necessarily a bug (real news moves prices >10% in a
+-- minute sometimes), but every row here deserves a human look before trusting
+-- any aggregate metric that includes it.
+SELECT symbol, bar_ts, open, close, bar_return
+FROM MARKET_AGENT.GOLD.FCT_BARS
+WHERE date_key = CURRENT_DATE() AND is_suspect
+ORDER BY ABS(bar_return) DESC;
+
 -- Mirrors "total_volume_by_sector"
 SELECT s.sector, SUM(b.volume) AS total_volume
 FROM MARKET_AGENT.GOLD.FCT_BARS b

@@ -22,6 +22,16 @@ tables:
         expr: date_key
         data_type: date
         description: "Calendar date the bar occurred."
+      - name: is_suspect
+        expr: is_suspect
+        data_type: boolean
+        description: >
+          Circuit-breaker flag: true when this bar moved >10% in one minute.
+          Not automatically excluded from any measure below -- a real
+          question like "what was our biggest mover today" needs these rows.
+          But any aggregate answer (revenue, volatility, etc.) should be
+          treated with more caution when it includes suspect bars; see the
+          circuit-breaker monitoring query in sql/08_validation.
     time_dimensions:
       - name: bar_ts
         expr: bar_ts
@@ -179,6 +189,14 @@ verified_queries:
       GROUP BY symbol
       ORDER BY volatility DESC
       LIMIT 10;
+
+  - name: suspect_bars_today
+    question: "How many suspicious price moves were flagged today?"
+    sql: >
+      SELECT symbol, bar_ts, open, close, bar_return
+      FROM MARKET_AGENT.GOLD.FCT_BARS
+      WHERE date_key = CURRENT_DATE() AND is_suspect
+      ORDER BY ABS(bar_return) DESC;
 
   - name: total_volume_by_sector
     question: "What was total trading volume by sector today?"

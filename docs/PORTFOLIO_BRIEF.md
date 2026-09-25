@@ -95,6 +95,47 @@ write-up because it shows engineering judgment, not just a finished result:
    hand-written SQL twin in `sql/08_validation/`, so any answer the agent
    gives can be independently checked rather than trusted on faith.
 
+## Guardrails — the part that separates this from a toy pipeline
+
+Real companies running AI agents over live data don't trust the agent; they
+constrain the blast radius so a bad answer or a bad query can't do damage.
+This project implements the concrete version of that, not just the concept:
+
+- **Dead-letter queue** — a malformed trade/bar message doesn't get logged
+  and dropped, it gets routed to a `market-data-dlq` Kafka topic so it stays
+  inspectable. Building this exposed a real bug: an early OHLC sanity check
+  was a per-field Pydantic validator that silently never fired, because
+  Pydantic validates fields in declaration order and `low` wasn't parsed yet
+  when `high` was checked against it. Fixed with a model-level validator that
+  sees every field regardless of order — the kind of subtle correctness bug
+  that only shows up when you actually test the failure path, not just the
+  happy path.
+- **Hard data-quality gate** — `dbt test` fails the build if any Gold row has
+  `high < low`, a non-positive price, or negative volume. Not a warning, a
+  build failure.
+- **Circuit-breaker flag, not a filter** — a >10% one-minute move gets an
+  `is_suspect` flag in `fct_bars` rather than being silently dropped or
+  silently trusted. A real earnings move and a bad tick look identical to a
+  naive filter; flagging both for review is the honest answer, and a
+  monitoring query (`suspect_bars_today`) surfaces them.
+- **Blast-radius isolation** — the agent's role queries through a dedicated
+  warehouse (`ANALYST_WH`) with a 30-second statement timeout and its own
+  Resource Monitor, so a runaway or malicious NL-generated query can only ever
+  burn that warehouse's capped budget, never contend with ingestion/dbt
+  compute or blow through the account's credits.
+- **Append-only audit trail** — every question asked through
+  `agent/cortex_client.py` and the SQL Cortex Analyst generated for it gets
+  written to `MARKET_AGENT.GOVERNANCE.AGENT_QUERY_AUDIT_LOG`. The agent's role
+  can `INSERT` into that table but never `UPDATE`/`DELETE` — it can't quietly
+  edit its own history. If the audit write itself fails, that's logged at
+  `ERROR` level but never allowed to break the user-facing answer — a broken
+  audit path shouldn't punish the user, but a silent audit gap is its own
+  incident, which is why it's loud instead of swallowed.
+- **Row Access Policy** (covered under Governance above) is the guardrail that
+  matters most: the agent's role is architecturally incapable of seeing a
+  real-time price it isn't licensed to show, regardless of what question is
+  asked or how it's phrased.
+
 ## Dataset
 
 Two sources, matched to the same Bronze schema so nothing downstream cares

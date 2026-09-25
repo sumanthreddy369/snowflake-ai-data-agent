@@ -7,3 +7,4 @@ httpx
 
 # agent/ (Step 6, instrumented Cortex Analyst client)
 langfuse
+snowflake-connector-python

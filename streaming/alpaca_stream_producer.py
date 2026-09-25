@@ -107,8 +107,15 @@ def run(args, producer: KafkaProducer):
                         logger.info("bar %s", record.model_dump_json())
                     # other T values (success/error/subscription) are control messages
                 except ValidationError as e:
-                    # A malformed message shouldn't kill the stream; log and skip it.
-                    logger.warning("dropping invalid message %s: %s", msg, e)
+                    # A malformed message shouldn't kill the stream, but it also
+                    # shouldn't be silently discarded -- route it to a DLQ topic
+                    # so someone can see what's actually breaking upstream.
+                    logger.warning("routing invalid message to DLQ: %s (%s)", msg, e)
+                    producer.send(
+                        args.dlq_topic,
+                        value={"raw_message": msg, "error": str(e)},
+                        key=msg.get("S", "unknown").encode("utf-8"),
+                    )
 
 
 def main():
@@ -118,6 +125,7 @@ def main():
     parser.add_argument("--bootstrap-servers", default="localhost:9092")
     parser.add_argument("--trades-topic", default="market-trades")
     parser.add_argument("--bars-topic", default="market-bars")
+    parser.add_argument("--dlq-topic", default="market-data-dlq")
     args = parser.parse_args()
 
     producer = KafkaProducer(

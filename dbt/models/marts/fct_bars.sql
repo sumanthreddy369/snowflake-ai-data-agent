@@ -15,5 +15,11 @@ select
     stddev(bar_return) over (
         partition by symbol order by bar_ts
         rows between 29 preceding and current row
-    ) as rolling_volatility_30
+    ) as rolling_volatility_30,
+    -- Circuit-breaker flag: a >10% move in a single minute bar is unusual
+    -- enough to warrant a human look before the agent treats it as fact.
+    -- Flagged, not dropped -- a real move (e.g. earnings news) is legitimate
+    -- data; a bad tick is a data bug. Either way, it shouldn't be silently
+    -- trusted. See sql/08_validation for the monitoring query this feeds.
+    abs(bar_return) > 0.10 as is_suspect
 from {{ ref('stg_bars') }}

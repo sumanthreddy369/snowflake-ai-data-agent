@@ -8,7 +8,7 @@ validate against the same contract instead of passing around raw dicts.
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class TradeRecord(BaseModel):
@@ -46,13 +46,19 @@ class BarRecord(BaseModel):
             raise ValueError("bar_ts must be timezone-aware (use UTC)")
         return v
 
-    @field_validator("high")
-    @classmethod
-    def high_is_highest(cls, v, info):
-        low = info.data.get("low")
-        if low is not None and v < low:
-            raise ValueError(f"high ({v}) is below low ({low})")
-        return v
+    @model_validator(mode="after")
+    def ohlc_is_internally_consistent(self):
+        # A field_validator on `high` alone can't see `low` if `low` is
+        # declared later in the model (Pydantic validates fields in
+        # declaration order, so `low` isn't parsed yet) -- this has to be a
+        # model-level check to see every field regardless of order.
+        if self.high < self.low:
+            raise ValueError(f"high ({self.high}) is below low ({self.low})")
+        if self.high < self.open or self.high < self.close:
+            raise ValueError(f"high ({self.high}) is below open/close")
+        if self.low > self.open or self.low > self.close:
+            raise ValueError(f"low ({self.low}) is above open/close")
+        return self
 
 
 class SymbolRecord(BaseModel):

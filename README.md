@@ -41,6 +41,22 @@ the portfolio even where the domain and cloud provider differ.
 | 7. Governance | Control who/what can access real-time vs. delayed data | RBAC + Row Access Policy | [`sql/07_governance/rbac_and_masking.sql`](sql/07_governance/rbac_and_masking.sql) |
 | 8. Validate | Check the agent's answers are correct | Manual SQL comparison | [`sql/08_validation/validation_queries.sql`](sql/08_validation/validation_queries.sql) |
 
+## Guardrails
+
+Cutting across all 8 steps rather than living in one of them — see
+[`sql/09_guardrails/cost_and_access_guardrails.sql`](sql/09_guardrails/cost_and_access_guardrails.sql)
+unless noted otherwise:
+
+| Guardrail | What it prevents | Where |
+|---|---|---|
+| Dead-letter queue | A malformed message silently vanishing instead of being inspectable | `streaming/alpaca_stream_producer.py`, `streaming/replay_sample_data.py` → `market-data-dlq` topic |
+| OHLC sanity test | A data bug (`high < low`, negative price) being trusted as a real data point | `dbt/tests/assert_bar_ohlc_consistency.sql` (fails the build) |
+| Circuit-breaker flag | A bad tick (or a real 10%+ move) being silently baked into an aggregate answer with no way to know | `is_suspect` column on `fct_bars` (flags, doesn't drop) + `suspect_bars_today` monitoring query |
+| Dedicated agent warehouse + statement timeout | A runaway or malicious NL-generated query burning shared compute or running forever | `ANALYST_WH`, 30s statement timeout |
+| Resource Monitor | One bad session blowing through the account's credit budget | `ANALYST_AGENT_MONITOR`, hard-suspends at 100% of a monthly quota |
+| Append-only audit log | The agent's own query history being edited after the fact | `MARKET_AGENT.GOVERNANCE.AGENT_QUERY_AUDIT_LOG` — `ANALYST_AGENT` can `INSERT`, never `UPDATE`/`DELETE` |
+| Row Access Policy | The agent seeing real-time prices it isn't licensed to show | `sql/07_governance/rbac_and_masking.sql` (already covered under Governance above) |
+
 ## Layout
 
 ```
@@ -50,7 +66,8 @@ snowflake-ai-data-agent/
 │   ├── 02_bronze/bronze_tables.sql         # raw landing tables, untouched
 │   ├── 03_silver/streams_and_tasks.sql     # dedupe/standardize via Streams+Tasks
 │   ├── 07_governance/rbac_and_masking.sql  # roles, grants, delayed-data row access policy
-│   └── 08_validation/validation_queries.sql
+│   ├── 08_validation/validation_queries.sql
+│   └── 09_guardrails/cost_and_access_guardrails.sql  # resource monitor, timeouts, audit log
 ├── streaming/                              # live path: Alpaca -> Kafka -> Snowpipe Streaming
 │   ├── schemas.py                          # shared Pydantic contracts for trades/bars/symbols
 │   ├── alpaca_stream_producer.py           # live feed (tenacity retries, structured logging)
@@ -63,9 +80,10 @@ snowflake-ai-data-agent/
 ├── dbt/
 │   ├── dbt_project.yml
 │   ├── profiles.yml.example
-│   └── models/
-│       ├── staging/     # 1:1 views over Silver (trades, bars, symbols)
-│       └── marts/       # Gold star schema (dim_symbols, dim_date, fct_trades, fct_bars)
+│   ├── models/
+│   │   ├── staging/     # 1:1 views over Silver (trades, bars, symbols)
+│   │   └── marts/       # Gold star schema (dim_symbols, dim_date, fct_trades, fct_bars)
+│   └── tests/assert_bar_ohlc_consistency.sql  # guardrail: fails the build on bad OHLC data
 ├── semantic_layer/
 │   └── semantic_model.yaml                 # Cortex Analyst semantic model
 ├── requirements.txt
@@ -88,10 +106,15 @@ snowflake-ai-data-agent/
 6. Run `sql/07_governance` to apply the delayed-data row access policy and
    restrict roles before opening the agent up to real users — the
    ANALYST_AGENT role should never see true real-time prices.
-7. Ask the agent a question in Snowsight, or via
+7. Run `sql/09_guardrails` to create the dedicated agent warehouse, its
+   Resource Monitor, and the append-only audit log table — do this before
+   pointing real users at the agent, not after.
+8. Ask the agent a question in Snowsight, or via
    [`agent/cortex_client.py`](agent/cortex_client.py) if you want every query
-   traced through Langfuse; then run the matching query in
-   `sql/08_validation/validation_queries.sql` and diff the numbers by hand.
+   traced through Langfuse and logged to the audit table; then run the
+   matching query in `sql/08_validation/validation_queries.sql` and diff the
+   numbers by hand. Run `dbt test` periodically to catch OHLC data bugs, and
+   check the `suspect_bars_today` query for flagged anomalies.
 
 ## Status
 
