@@ -11,4 +11,13 @@ streaming/data/*
 !streaming/data/sample_bars.csv
 !streaming/data/sample_trades.csv
 !streaming/data/sample_symbols.csv
+!streaming/data/sample_news.csv
 *.local.json
+
+# Trained model artifacts -- regenerate with snowpark/train_anomaly_model.py
+# rather than committing a binary that goes stale the moment the sample data
+# (or the real historical data, later) changes.
+*.onnx
+
+# Streamlit's local run cache
+.streamlit/

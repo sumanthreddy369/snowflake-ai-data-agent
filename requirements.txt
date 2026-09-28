@@ -1,10 +1,24 @@
-# streaming/ (Steps 1 & the offline fallback)
+# streaming/ (Steps 1 & 4b & the offline fallbacks)
 kafka-python
 websockets
 pydantic>=2
 tenacity
 httpx
 
-# agent/ (Step 6, instrumented Cortex Analyst client)
+# agent/ (Steps 6 & 6b: instrumented Cortex Analyst + Cortex Agent clients, MCP server)
 langfuse
 snowflake-connector-python
+fastmcp
+
+# ui/ (Streamlit chat UI) and api/ (FastAPI HTTP layer)
+streamlit
+fastapi
+uvicorn
+
+# snowpark/ (ONNX anomaly-detection model, trained locally then registered
+# to Snowflake's Model Registry -- snowflake-ml-python is only needed once
+# you uncomment register_to_snowflake() against a live account)
+scikit-learn
+skl2onnx
+onnx
+# snowflake-ml-python

@@ -51,6 +51,16 @@ CREATE PIPE IF NOT EXISTS MARKET_AGENT.BRONZE.BARS_BACKFILL_PIPE
   FILE_FORMAT = MARKET_AGENT.BRONZE.CSV_STANDARD
   PATTERN = '.*bars.*[.]csv';
 
+-- News documents (from streaming/backfill_news.py or streaming/generate_sample_news.py)
+-- feeding the RAG branch -- see sql/04_documents/documents_and_search.sql.
+CREATE PIPE IF NOT EXISTS MARKET_AGENT.BRONZE.NEWS_PIPE
+  AUTO_INGEST = TRUE
+  AS
+  COPY INTO MARKET_AGENT.BRONZE.RAW_NEWS
+  FROM @MARKET_AGENT.BRONZE.RAW_STAGE/news/
+  FILE_FORMAT = MARKET_AGENT.BRONZE.CSV_STANDARD
+  PATTERN = '.*news.*[.]csv';
+
 -- After creating each pipe, register its notification_channel (SHOW PIPES)
 -- with a GCS Pub/Sub notification on the bucket to trigger ingestion —
 -- see https://docs.snowflake.com/en/user-guide/data-load-snowpipe-auto-gcs

@@ -52,6 +52,20 @@ ALPACA_API_KEY=... ALPACA_API_SECRET=... python backfill_historical.py \
   --start 2026-01-01 --end 2026-09-01
 ```
 
+## Documents (the RAG source)
+
+[`generate_sample_news.py`](generate_sample_news.py) produces
+`data/sample_news.csv` (checked into the repo, synthetic headlines/summaries
+per symbol) so `sql/04_documents`'s Cortex Search Service has something to
+index with no external account. [`backfill_news.py`](backfill_news.py) pulls
+the real thing from Alpaca's News API (`/v1beta1/news`) — the same Alpaca
+account already used for market data, no new vendor:
+
+```bash
+ALPACA_API_KEY=... ALPACA_API_SECRET=... python backfill_news.py \
+  --start 2026-08-01 --end 2026-09-01
+```
+
 ## Why this matters (Snowpipe vs Snowpipe Streaming vs Databricks)
 
 | | Snowpipe (file-based) | Snowpipe Streaming (this folder) | Databricks Structured Streaming |

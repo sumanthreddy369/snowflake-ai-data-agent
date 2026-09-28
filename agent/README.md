@@ -1,16 +1,34 @@
-# Agent client (Step 6, instrumented)
+# Agent clients (Steps 6 & 6b, instrumented) + MCP server
 
-Cortex Analyst itself needs no code — Snowsight's chat UI calls it directly.
-This folder exists for one reason: to make every question asked of the agent
-observable the same way an LLM call in a hand-coded agent would be, using the
-same Langfuse-based observability pattern as this project's other work.
+Two clients, two jobs:
 
-`cortex_client.py` is a thin `httpx` wrapper around the [Cortex Analyst REST
-API](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-analyst/rest-api),
-decorated with Langfuse's `@observe(as_type="generation")` so every call
-records the question, latency, and the SQL Cortex Analyst generated. Retries
-transient failures via `tenacity`; request/response shapes are Pydantic
+- **`cortex_client.py`** — a thin `httpx` wrapper around the [Cortex Analyst
+  REST API](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-analyst/rest-api),
+  for when you already know the question is purely quantitative
+  (price/volume/return/volatility). Points at the YAML semantic model, which
+  carries the richer custom metric definitions (`period_return`, `volatility`)
+  that don't fit cleanly into a plain Semantic View aggregation.
+- **`cortex_agent_client.py`** — calls the multi-tool Cortex Agent
+  (`sql/10_agent/cortex_agent.sql`) instead, which decides per-question
+  whether to query structured data (via the native Semantic View), search
+  recent news (via Cortex Search, with citations), or both.
+
+Both are decorated with Langfuse's `@observe(as_type="generation")` so every
+call records the question, latency, and what was generated — the same
+observability pattern as this project's other work, applied here even though
+neither Cortex Analyst nor Cortex Agents is code we wrote ourselves. Both
+retry transient failures via `tenacity`; request/response shapes are Pydantic
 models in `schemas.py`.
+
+**`mcp_server.py`** exposes both clients, plus a direct guardrail-monitoring
+query (`get_flagged_anomalies`), as MCP tools via [FastMCP](https://gofastmcp.com/) —
+the "Agent interoperability" piece of the architecture, so any MCP-aware
+client (including Claude) can call this project's governed data access as a
+tool. This is a standalone MCP server, not Snowflake's own managed MCP server
+(a Native Apps feature that would require packaging this project as a
+Snowflake Native App) — a simpler, independently runnable substitute that
+wraps the same governed clients and adds no access beyond what they already
+have.
 
 **This is not where governance happens.** The client authenticates with a PAT
 scoped to the `ANALYST_AGENT` role, and it's the Row Access Policy on that
@@ -49,4 +67,8 @@ export SNOWFLAKE_ROLE=ANALYST_AGENT        # optional, this is already the defau
 export LANGFUSE_PUBLIC_KEY=... LANGFUSE_SECRET_KEY=... LANGFUSE_HOST=...
 
 python cortex_client.py "What was today's return for AAPL?"
+python cortex_agent_client.py "What's happening with AAPL today?"
+
+# Run the MCP server for an MCP-aware client to connect to:
+python mcp_server.py
 ```

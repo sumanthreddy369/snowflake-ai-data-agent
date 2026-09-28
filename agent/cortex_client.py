@@ -33,12 +33,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("cortex_client")
 
 
-def _write_audit_log(question: str, response: "CortexAnalystResponse") -> None:
+def _write_audit_log(
+    question: str, sql: str | None, request_id: str | None, is_ambiguous: bool = False
+) -> None:
     # Guardrail: every question gets logged to an append-only table
-    # (sql/09_guardrails) before this function returns. A failure here is
-    # logged loudly but never raised -- audit logging should never be the
-    # reason a real user-facing query fails, but a silent audit gap is its
-    # own kind of incident, hence the ERROR-level log rather than a warning.
+    # (sql/09_guardrails) before the caller returns. A failure here is logged
+    # loudly but never raised -- audit logging should never be the reason a
+    # real user-facing query fails, but a silent audit gap is its own kind of
+    # incident, hence the ERROR-level log rather than a warning. Shared by
+    # both cortex_client.py and cortex_agent_client.py so every question,
+    # regardless of entry point, lands in one audit trail.
     try:
         conn = snowflake.connector.connect(
             account=os.environ["SNOWFLAKE_ACCOUNT"],
@@ -54,7 +58,7 @@ def _write_audit_log(question: str, response: "CortexAnalystResponse") -> None:
                     (question, generated_sql, request_id, is_ambiguous)
                 VALUES (%s, %s, %s, %s)
                 """,
-                (question, response.sql, response.request_id, response.is_ambiguous),
+                (question, sql, request_id, is_ambiguous),
             )
         finally:
             conn.close()
@@ -109,7 +113,7 @@ def ask_cortex_analyst(question: str) -> CortexAnalystResponse:
         suggestions=suggestion.get("suggestions") if suggestion else None,
         is_ambiguous=suggestion is not None,
     )
-    _write_audit_log(question, result)
+    _write_audit_log(question, result.sql, result.request_id, result.is_ambiguous)
     return result
 
 

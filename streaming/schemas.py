@@ -67,3 +67,23 @@ class SymbolRecord(BaseModel):
     sector: str
     exchange: str
     is_active: bool = True
+
+
+class NewsRecord(BaseModel):
+    """The document source for RAG (sql/04_documents, Cortex Search)."""
+
+    news_id: str
+    headline: str
+    summary: str = ""
+    content: str = ""
+    symbols: str = ""  # comma-joined, matches Alpaca's list field flattened for CSV/Kafka
+    source: str = ""
+    url: str = ""
+    published_at: datetime
+
+    @field_validator("published_at")
+    @classmethod
+    def must_be_timezone_aware(cls, v: datetime) -> datetime:
+        if v.tzinfo is None:
+            raise ValueError("published_at must be timezone-aware (use UTC)")
+        return v
