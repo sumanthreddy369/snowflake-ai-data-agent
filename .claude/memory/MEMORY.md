@@ -1,0 +1,2 @@
+- [AI Data Agent project workflow](project_ai_data_agent.md) — Snowflake pipeline stages (Snowpipe→Bronze→Silver→Gold/dbt→Cortex Analyst→RBAC→validate)
+- [User background](user_background.md) — mtu.edu, building data-engineering/AI-agent portfolio projects
