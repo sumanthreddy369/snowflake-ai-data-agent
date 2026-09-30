@@ -22,7 +22,9 @@ from MARKET_AGENT.GOLD.FCT_BARS once you have a live account (see the
 commented-out block below).
 """
 
+import argparse
 import logging
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -34,8 +36,14 @@ logger = logging.getLogger("train_anomaly_model")
 
 FEATURES = ["bar_return", "volume"]
 
+# Resolved from this file's location, not the caller's working directory, so
+# the script works the same whether it's run from snowpark/ or the repo root.
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_BARS_CSV = SCRIPT_DIR.parent / "streaming" / "data" / "sample_bars.csv"
+DEFAULT_ONNX_PATH = SCRIPT_DIR / "anomaly_model.onnx"
 
-def load_training_data(path: str = "../streaming/data/sample_bars.csv") -> pd.DataFrame:
+
+def load_training_data(path: Path = DEFAULT_BARS_CSV) -> pd.DataFrame:
     df = pd.read_csv(path)
     df["bar_return"] = (df["close"] - df["open"]) / df["open"]
     return df[FEATURES].dropna()
@@ -58,7 +66,7 @@ def train(df: pd.DataFrame) -> IsolationForest:
     return model
 
 
-def export_to_onnx(model: IsolationForest, path: str = "anomaly_model.onnx") -> None:
+def export_to_onnx(model: IsolationForest, path: Path = DEFAULT_ONNX_PATH) -> None:
     # target_opset pins the ai.onnx.ml domain version explicitly -- without
     # it, skl2onnx picks whatever the installed onnx package defaults to,
     # which can be newer than skl2onnx's own converter supports (hit exactly
@@ -103,8 +111,17 @@ def register_to_snowflake(onnx_path: str) -> None:
     )
 
 
-if __name__ == "__main__":
-    data = load_training_data()
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--bars-csv", type=Path, default=DEFAULT_BARS_CSV)
+    parser.add_argument("--out", type=Path, default=DEFAULT_ONNX_PATH)
+    args = parser.parse_args()
+
+    data = load_training_data(args.bars_csv)
     model = train(data)
-    export_to_onnx(model)
+    export_to_onnx(model, args.out)
     logger.info("model trained and exported. Run register_to_snowflake() once Snowflake is connected.")
+
+
+if __name__ == "__main__":
+    main()

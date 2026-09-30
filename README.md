@@ -31,7 +31,7 @@ snowflake-ai-data-agent/
 │   ├── 04_documents/
 │   │   └── documents_and_search.sql    # RAW_NEWS -> SILVER.NEWS -> Cortex Search Service
 │   ├── 07_governance/
-│   │   └── rbac_and_masking.sql        # roles, grants, DELAYED_DATA_POLICY (row access policy)
+│   │   └── rbac_and_masking.sql        # roles, grants, GOLD/STAGING schemas, DELAYED_DATA_POLICY (attached by dbt post-hook)
 │   ├── 08_validation/
 │   │   └── validation_queries.sql      # hand-written SQL twin of every semantic-model verified_query
 │   ├── 09_guardrails/
@@ -62,6 +62,7 @@ snowflake-ai-data-agent/
 ├── dbt/
 │   ├── dbt_project.yml                 # project name is stale ("retail_agent_gold") -- see docs/restructure-proposal.md
 │   ├── profiles.yml.example            # copy to ~/.dbt/profiles.yml
+│   ├── macros/generate_schema_name.sql # marts land in GOLD, not dbt's default GOLD_GOLD
 │   ├── models/staging/                 # 1:1 views over Silver: stg_trades, stg_bars, stg_symbols
 │   ├── models/marts/                   # Gold star schema: dim_symbols, dim_date, fct_trades, fct_bars
 │   └── tests/assert_bar_ohlc_consistency.sql  # singular test: fails `dbt test` on bad OHLC data
@@ -347,10 +348,14 @@ pip install dbt-snowflake
 
 There is no build step — this is SQL run directly against Snowflake, plus plain Python scripts. Order matters; see the numbered prefixes under `sql/` and the walkthrough below.
 
-1. Run the SQL files in `sql/` in numeric-prefix order (`01_ingest` → `02_bronze` → `03_silver` → `04_documents` → `07_governance` → `08_validation` → `09_guardrails` → `10_agent`), plus `semantic_layer/semantic_view.sql`, against your Snowflake account (Snowsight worksheet or SnowSQL).
-2. `cd dbt && dbt run` (after copying `profiles.yml.example` to `~/.dbt/profiles.yml` and filling in your account).
-3. Generate or replay data — see the table below.
-4. Run any of the five agent entry points — see [API / usage](#api--usage).
+The Gold tables are created by dbt, so the steps that read from or attach to them have to come after `dbt run`. The numeric prefixes under `sql/` alone don't show this.
+
+1. **Before dbt**, run these against your Snowflake account (Snowsight worksheet or SnowSQL), in order: `sql/01_ingest` → `02_bronze` → `03_silver` → `04_documents` → `07_governance` → `09_guardrails`. `07_governance` creates the `GOLD` and `STAGING` schemas and the Row Access Policy, and grants `TRANSFORMER` what dbt needs.
+2. `cd dbt && dbt run` (after copying `profiles.yml.example` to `~/.dbt/profiles.yml` and filling in your account). This builds the Gold tables and attaches `DELAYED_DATA_POLICY` to `FCT_TRADES` and `FCT_BARS` through a post-hook on each model, so every rebuild comes back governed.
+3. **After dbt**, run `semantic_layer/semantic_view.sql` → `sql/10_agent`. Both reference Gold tables that only exist once step 2 has run.
+4. Generate or replay data — see the table below.
+5. Run `sql/08_validation` to check the agent's answers. Its last query confirms the policy is attached to both fact tables.
+6. Run any of the five agent entry points — see [API / usage](#api--usage).
 
 ---
 

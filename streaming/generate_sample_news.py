@@ -7,16 +7,22 @@ from backfill_news.py, which pulls the same fields from Alpaca's actual
 data (no new vendor needed).
 """
 
+import argparse
 import csv
 import logging
 import random
 from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from schemas import NewsRecord
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("generate_sample_news")
+
+# Resolved from this file's location, not the caller's working directory, so
+# the script works the same whether it's run from streaming/ or the repo root.
+DATA_DIR = Path(__file__).resolve().parent / "data"
 
 random.seed(7)
 
@@ -71,5 +77,13 @@ def write_csv(path, models):
     logger.info("wrote %d rows to %s", len(rows), path)
 
 
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out-dir", type=Path, default=DATA_DIR)
+    args = parser.parse_args()
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    write_csv(args.out_dir / "sample_news.csv", generate_news())
+
+
 if __name__ == "__main__":
-    write_csv("data/sample_news.csv", generate_news())
+    main()

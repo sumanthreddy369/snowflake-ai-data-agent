@@ -117,9 +117,14 @@ flowchart TD
     Recent --> |no| Hidden
 ```
 
-This is `DELAYED_DATA_POLICY` (`sql/07_governance/rbac_and_masking.sql`),
-attached to `FCT_TRADES.trade_ts` and `FCT_BARS.bar_ts` with `ALTER TABLE ...
-ADD ROW ACCESS POLICY`. It runs inside Snowflake, underneath the Semantic
+This is `DELAYED_DATA_POLICY`, created in `sql/07_governance/rbac_and_masking.sql`
+and attached to `FCT_TRADES.trade_ts` and `FCT_BARS.bar_ts` by a dbt
+`post_hook` in each fact model (`ALTER TABLE {{ this }} ADD ROW ACCESS POLICY
+...`). It's attached there rather than by a one-time `ALTER TABLE` in the SQL
+file because dbt rebuilds those tables with `CREATE OR REPLACE` on every run,
+which would silently drop a policy attached any other way;
+`sql/08_validation` has a `POLICY_REFERENCES` check to confirm it's still
+attached. It runs inside Snowflake, underneath the Semantic
 View, underneath Cortex Analyst, underneath the Cortex Agent — so it applies
 the same way whether the query came from Snowsight, one of the five entry
 points above, or a future client nobody has written yet. `ANALYST_AGENT` is

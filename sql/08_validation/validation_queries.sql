@@ -38,3 +38,16 @@ ORDER BY total_volume DESC;
 
 -- Add one block per new verified_query so the agent's answers stay auditable
 -- against a query a human wrote and checked independently.
+
+-- Governance check, not a verified_query twin: confirm DELAYED_DATA_POLICY is
+-- actually attached to both fact tables after the latest dbt run. It's applied
+-- by a dbt post-hook, so if a model's config is ever changed and the hook lost,
+-- this is where it shows up -- expect exactly one row per table, on trade_ts
+-- and bar_ts respectively. Zero rows means the agent is seeing real-time data.
+SELECT ref_entity_name, ref_column_name, policy_name, policy_status
+FROM TABLE(MARKET_AGENT.INFORMATION_SCHEMA.POLICY_REFERENCES(
+  ref_entity_name => 'MARKET_AGENT.GOLD.FCT_TRADES', ref_entity_domain => 'table'))
+UNION ALL
+SELECT ref_entity_name, ref_column_name, policy_name, policy_status
+FROM TABLE(MARKET_AGENT.INFORMATION_SCHEMA.POLICY_REFERENCES(
+  ref_entity_name => 'MARKET_AGENT.GOLD.FCT_BARS', ref_entity_domain => 'table'));

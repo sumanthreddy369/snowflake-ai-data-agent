@@ -12,16 +12,22 @@ API key and want genuinely live data; the column layout is identical either
 way, so nothing downstream needs to change.
 """
 
+import argparse
 import csv
 import logging
 import random
 from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from schemas import BarRecord, SymbolRecord, TradeRecord
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("generate_sample_data")
+
+# Resolved from this file's location, not the caller's working directory, so
+# the script works the same whether it's run from streaming/ or the repo root.
+DATA_DIR = Path(__file__).resolve().parent / "data"
 
 random.seed(42)
 
@@ -107,8 +113,17 @@ def write_symbols_csv(path):
     write_csv(path, symbols)
 
 
-if __name__ == "__main__":
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out-dir", type=Path, default=DATA_DIR)
+    args = parser.parse_args()
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+
     bars, trades = generate_bars_and_trades()
-    write_csv("data/sample_bars.csv", bars)
-    write_csv("data/sample_trades.csv", trades)
-    write_symbols_csv("data/sample_symbols.csv")
+    write_csv(args.out_dir / "sample_bars.csv", bars)
+    write_csv(args.out_dir / "sample_trades.csv", trades)
+    write_symbols_csv(args.out_dir / "sample_symbols.csv")
+
+
+if __name__ == "__main__":
+    main()
