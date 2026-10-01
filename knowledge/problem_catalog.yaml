@@ -1,0 +1,1728 @@
+# Problem catalog for the snowflake-ai-data-agent ops and analyst agents.
+#
+# One source of truth for both audiences:
+#   - agents load it as knowledge (match a symptom to a problem ID, follow the
+#     solution, respect the guardrail), and every entry with bad_sql/good_sql
+#     doubles as an eval case;
+#   - docs/build_playbook.py renders it into docs/snowflake-e2e-agent-playbook.pdf.
+#
+# Fields per problem: id, title, symptom, who, agents (first = owner),
+# solution, guardrail, optional bad_sql/good_sql. Validated by the Pydantic
+# models in docs/build_playbook.py. This is a plan: none of these agents exist
+# yet.
+
+agents:
+- code: WATCH
+  name: Ingestion Watchdog
+  owns: Alpaca feed, Kafka, Kafka Connect, Snowpipe Streaming, GCS/Snowpipe batch loads
+  tools: Alpaca /v2/clock + /v2/calendar; Kafka consumer-group lag and topic offsets (read-only admin API); Kafka
+    Connect REST status; SNOWPIPE_STREAMING_CLIENT/CHANNEL history; SYSTEM$PIPE_STATUS; COPY_HISTORY; DLQ topic
+    reader
+- code: DOCTOR
+  name: Pipeline Doctor
+  owns: Streams, Tasks, Dynamic Tables, dbt runs
+  tools: SHOW STREAMS (stale flag); TASK_HISTORY; DYNAMIC_TABLE_REFRESH_HISTORY; dbt run_results.json + manifest.json;
+    EXECUTE TASK / RESUME TASK (approval-gated)
+- code: DQ
+  name: Data Quality Sentinel
+  owns: Correctness of the numbers in Bronze, Silver and Gold
+  tools: Row-count reconciliation queries across layers; FCT_BARS.is_suspect; ONNX anomaly model score; Alpaca corporate-actions
+    API; sql/08_validation queries
+- code: XFORM
+  name: Transformation Copilot
+  owns: dbt models, schema changes, tests, docs
+  tools: Git repo (read + open PR only); dbt parse/compile/test against a dev schema; INFORMATION_SCHEMA.COLUMNS
+    diff
+- code: ANALYST
+  name: Analyst Copilot
+  owns: Business questions from humans (this is the Cortex Agent the repo already defines)
+  tools: Cortex Analyst over MARKET_SEMANTIC_VIEW; Cortex Search over NEWS_SEARCH_SERVICE; freshness lookup on Gold
+- code: CURATOR
+  name: Semantic Curator
+  owns: 'Semantic model quality: metrics, synonyms, verified queries'
+  tools: semantic_model.yaml + semantic_view.sql (read + PR); AGENT_QUERY_AUDIT_LOG; thumbs-down feedback table
+- code: GUARD
+  name: Governance and Cost Guard
+  owns: Access, licensing, policy drift, credit spend, prompt injection
+  tools: POLICY_REFERENCES; GRANTS_TO_ROLES; ACCESS_HISTORY; WAREHOUSE_METERING_HISTORY; CORTEX usage views; resource
+    monitors
+- code: SCALE
+  name: Capacity and Resilience
+  owns: Load spikes, scaling, outages, failover and catch-up after recovery
+  tools: WAREHOUSE_LOAD_HISTORY; QUERY_HISTORY queued/blocked time; Kafka broker disk and throughput metrics; connector
+    task counts; replication/failover group status; ALTER WAREHOUSE within fixed size limits (pre-approved)
+- code: SQLCOACH
+  name: SQL Coach
+  owns: 'Correctness and performance of every SQL statement: Silver MERGEs, dbt models, verified queries, analysts''
+    worksheets and SQL the ANALYST agent generates'
+  tools: EXPLAIN; GET_QUERY_OPERATOR_STATS (query profile); QUERY_HISTORY (spill, partitions scanned, rows produced);
+    run a query and its rewrite on a zero-copy clone and compare results; this catalog's bad/good SQL pairs
+- code: RELEASE
+  name: Release Manager
+  owns: 'Getting changes from a developer''s branch into production safely: environments, migrations, CI, deploy
+    order, rollback, impact on consumers'
+  tools: Git + CI results; dbt manifest and state comparison; GET_DDL diffs between DEV/TEST/PROD; OBJECT_DEPENDENCIES;
+    ACCESS_HISTORY (who reads a column); CREATE DATABASE ... CLONE; ALTER TABLE ... SWAP WITH (approval-gated)
+- code: TRIAGE
+  name: Incident Triage (orchestrator)
+  owns: Any alert; decides which specialist agent handles it
+  tools: Calls the other agents as tools; writes the incident timeline; pages a human with a summary
+stages:
+- id: A
+  name: Market-data source (Alpaca websocket + REST)
+  problems:
+  - id: A1
+    title: Silent stall
+    symptom: Websocket stays connected but stops sending messages, so the pipeline looks healthy while prices freeze.
+    who: DE
+    agents:
+    - WATCH
+    solution: 'WATCH compares last-message age against the Alpaca market clock: no messages for 60 s while the market
+      is open is an incident. Restarts the producer through its runbook.'
+    guardrail: Auto-restart allowed once; a second stall pages a human.
+  - id: A2
+    title: “No data” vs “broken”
+    symptom: Weekends, holidays, half-days and pre-market look identical to an outage. Alerts fire every Saturday.
+    who: DE
+    agents:
+    - WATCH
+    solution: WATCH checks /v2/calendar before raising anything. Suppresses alerts outside trading sessions and
+      says so in the alert text.
+    guardrail: Calendar cached daily; a mismatch with exchange calendar is flagged.
+  - id: A3
+    title: Reconnect duplicates and gaps
+    symptom: After a reconnect some trades repeat and some minutes are missing.
+    who: DE
+    agents:
+    - DQ
+    - WATCH
+    solution: DQ finds missing minute bars per symbol and duplicate trade_ids, then asks WATCH to backfill the exact
+      window via REST.
+    guardrail: Backfill limited to the gap window; never rewrites outside it.
+  - id: A4
+    title: Rate limits (HTTP 429) during backfill
+    symptom: Large history pulls fail halfway.
+    who: DE
+    agents:
+    - WATCH
+    solution: WATCH reads the failure, re-plans the backfill into smaller symbol/date chunks, resumes from the last
+      successful chunk.
+    guardrail: Concurrency cap set in config, not chosen by the agent.
+  - id: A5
+    title: Corporate actions
+    symptom: A 4:1 split makes a stock look like it fell 75%. Ticker renames (FB to META) split history in two.
+    who: DE + Analyst
+    agents:
+    - DQ
+    solution: DQ joins suspect moves against the corporate-actions API. Labels split-driven moves as explained,
+      proposes an adjustment-factor table.
+    guardrail: Price adjustment is a reviewed PR, never an in-place update.
+  - id: A6
+    title: Trade corrections and cancels
+    symptom: Exchanges cancel or correct prints; condition codes mark odd-lot or out-of-sequence trades.
+    who: DE + Analyst
+    agents:
+    - XFORM
+    - DQ
+    solution: XFORM proposes a condition-code filter in stg_trades; DQ reports how many trades each rule removes.
+    guardrail: Filter rules documented and tested in dbt.
+  - id: A7
+    title: Feed coverage mismatch
+    symptom: Free Alpaca IEX feed is a small share of total volume. Analysts compare to Bloomberg and think the
+      data is wrong.
+    who: Analyst
+    agents:
+    - ANALYST
+    solution: ANALYST states the feed source in every volume answer and explains the gap when a user disputes a
+      number.
+    guardrail: Feed name stored as a column, not assumed.
+  - id: A8
+    title: Vendor schema drift
+    symptom: A new field appears or a type changes, and validation starts rejecting every message.
+    who: DE
+    agents:
+    - WATCH
+    - XFORM
+    solution: WATCH sees the DLQ rate spike, clusters DLQ errors by field, and hands a summary to XFORM to draft
+      a schema update.
+    guardrail: Schema change goes through PR + CI; DLQ is replayed after merge.
+  - id: A9
+    title: Timezone and DST bugs
+    symptom: ET vs UTC confusion shifts the trading day; the DST weekend breaks “today”.
+    who: DE + Analyst
+    agents:
+    - DQ
+    solution: DQ asserts that every session has 390 minute bars between 13:30/14:30 UTC and 20:00/21:00 UTC depending
+      on DST.
+    guardrail: Assertion lives in dbt tests, not only in the agent.
+- id: B
+  name: Kafka and Kafka Connect
+  problems:
+  - id: B1
+    title: Consumer lag growing
+    symptom: Connector falls behind; “real-time” data becomes minutes old.
+    who: DE
+    agents:
+    - WATCH
+    solution: WATCH tracks lag trend, not a single value. Diagnoses cause (connector down, hot partition, slow Snowflake)
+      and recommends a fix.
+    guardrail: Scaling tasks or partitions needs approval.
+  - id: B2
+    title: DLQ grows silently
+    symptom: Bad messages are routed correctly, then nobody ever looks at them.
+    who: DE
+    agents:
+    - WATCH
+    solution: 'WATCH summarises the DLQ daily: top error types, affected symbols, whether the rows are replayable.'
+    guardrail: Replay of DLQ only after the root cause is fixed.
+  - id: B3
+    title: Hot partitions
+    symptom: TSLA/NVDA traffic lands on one partition and lags while others idle.
+    who: DE
+    agents:
+    - WATCH
+    solution: WATCH reports per-partition lag and proposes a different keying strategy.
+    guardrail: Repartitioning is a planned change, never automatic.
+  - id: B4
+    title: Retention expires before catch-up
+    symptom: A long outage means Kafka deletes data that never reached Snowflake.
+    who: DE
+    agents:
+    - WATCH
+    - TRIAGE
+    solution: WATCH projects time-to-retention-expiry from current lag and escalates early; TRIAGE triggers REST
+      backfill for the lost window.
+    guardrail: Escalation threshold set as a fixed fraction of retention.
+  - id: B5
+    title: Connector task failures
+    symptom: A task dies with a stack trace; restarts loop.
+    who: DE
+    agents:
+    - WATCH
+    solution: WATCH reads the Connect REST trace, matches it to known causes (auth, channel invalidated, schema),
+      applies the runbook step.
+    guardrail: One automated restart; repeat failure goes to a human.
+- id: C
+  name: Loading into Snowflake (Snowpipe Streaming, Snowpipe, GCS)
+  problems:
+  - id: C1
+    title: Duplicates after a connector restart
+    symptom: Offset tokens reset or channels are reopened, so rows load twice.
+    who: DE
+    agents:
+    - DQ
+    solution: DQ checks Bronze duplicate rate per channel after every restart event and reports it; Silver MERGE
+      dedupes by key.
+    guardrail: Silver keeps the dedupe; the agent only reports.
+  - id: C2
+    title: Batch loads fail silently
+    symptom: GCS file lands, COPY rejects rows, nobody notices. Or the Pub/Sub notification integration is misconfigured
+      and nothing loads.
+    who: DE
+    agents:
+    - WATCH
+    solution: WATCH compares files in the bucket with COPY_HISTORY and SYSTEM$PIPE_STATUS; reports files never loaded
+      or partially loaded.
+    guardrail: Reload uses a named file list, never a full re-scan.
+  - id: C3
+    title: Load-history dedupe
+    symptom: Re-uploading a fixed file with the same name is skipped by Snowpipe.
+    who: DE
+    agents:
+    - WATCH
+    solution: WATCH recognises the “already loaded” case and proposes the correct reload path.
+    guardrail: FORCE reloads require approval (risk of duplicates).
+  - id: C4
+    title: Backfill overlaps streaming
+    symptom: The boundary minute exists in both paths.
+    who: DE
+    agents:
+    - DQ
+    solution: DQ checks the overlap window after each backfill and confirms the MERGE kept one row per key.
+    guardrail: Overlap window defined explicitly per backfill run.
+  - id: C5
+    title: Small-file cost
+    symptom: Thousands of tiny files raise Snowpipe overhead.
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD reports cost per loaded GB and suggests batching thresholds.
+    guardrail: Recommendation only.
+- id: D
+  name: Bronze to Silver (Streams + Tasks, Dynamic Tables)
+  problems:
+  - id: D1
+    title: Stale stream
+    symptom: A stream not consumed within the retention window becomes stale; the only fix is recreate, and changes
+      in between are lost.
+    who: DE
+    agents:
+    - DOCTOR
+    solution: DOCTOR watches stream staleness dates and warns days ahead; if stale, runs the recreate + gap-backfill
+      runbook.
+    guardrail: Recreate needs approval; the gap backfill is logged.
+  - id: D2
+    title: Suspended or failing tasks
+    symptom: A task fails repeatedly and auto-suspends; Silver stops updating.
+    who: DE
+    agents:
+    - DOCTOR
+    solution: DOCTOR reads TASK_HISTORY errors, classifies (SQL error, warehouse, permissions), fixes known causes,
+      resumes.
+    guardrail: RESUME TASK allowed only for classified known causes.
+  - id: D3
+    title: Non-deterministic MERGE
+    symptom: Duplicate keys in the source batch make MERGE fail.
+    who: DE
+    agents:
+    - DOCTOR
+    solution: DOCTOR identifies the duplicate keys, explains which path produced them (see C1/C4).
+    guardrail: Fix goes into the QUALIFY dedupe, via PR.
+  - id: D4
+    title: Silent nulls from TRY_TO_ casts
+    symptom: Bad values become NULL instead of failing; data quietly disappears from metrics.
+    who: DE + Analyst
+    agents:
+    - DQ
+    solution: DQ tracks the NULL rate per cast column per hour and alerts on jumps.
+    guardrail: Threshold reviewed by a human once, then fixed in config.
+  - id: D5
+    title: Dynamic Table lag misses
+    symptom: Refreshes fall behind TARGET_LAG or fail.
+    who: DE
+    agents:
+    - DOCTOR
+    solution: DOCTOR reads DYNAMIC_TABLE_REFRESH_HISTORY and explains why (upstream, warehouse size, query change).
+    guardrail: Warehouse resizing needs approval.
+- id: E
+  name: Silver to Gold (dbt)
+  problems:
+  - id: E1
+    title: Full rebuilds get slow and expensive
+    symptom: Table materialisation rebuilds all history every run.
+    who: DE
+    agents:
+    - XFORM
+    solution: XFORM drafts incremental versions with a late-arrival lookback window and compares outputs against
+      the full rebuild.
+    guardrail: Merge only if row-by-row diff is zero on a test window.
+  - id: E2
+    title: 2 a.m. test failure
+    symptom: dbt test fails; the on-call engineer has to work out which test, which rows, and whether it is real.
+    who: DE
+    agents:
+    - DOCTOR
+    solution: DOCTOR reads run_results.json, runs the failing test's SQL, returns failing rows and the likely cause.
+    guardrail: The agent never disables or weakens a test.
+  - id: E3
+    title: Upstream schema change breaks models
+    symptom: ''
+    who: DE
+    agents:
+    - XFORM
+    solution: XFORM diffs INFORMATION_SCHEMA before/after, finds affected models via the dbt DAG, opens a fix PR.
+    guardrail: CI must pass; human review required.
+  - id: E4
+    title: Grants and policies lost on rebuild
+    symptom: CREATE OR REPLACE drops row access policies and table grants (found and fixed in this repo in commit
+      a480e77).
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD runs the POLICY_REFERENCES check after every dbt run; missing policy is a sev-1.
+    guardrail: Sev-1 pauses agent answers until fixed.
+  - id: E5
+    title: Window metrics wrong at boundaries
+    symptom: Rolling volatility runs across the overnight gap or across a split.
+    who: Analyst
+    agents:
+    - DQ
+    - XFORM
+    solution: DQ tests that rolling windows reset per session; XFORM proposes partitioning by trading date.
+    guardrail: Metric definition change requires CURATOR update too.
+  - id: E6
+    title: Docs drift
+    symptom: README run order no longer matches the code (also found in this repo).
+    who: DE
+    agents:
+    - XFORM
+    solution: XFORM checks documented commands and object names against the code on every PR.
+    guardrail: Flags only; a human edits the docs.
+- id: F
+  name: Semantic layer, Cortex Analyst, Cortex Agent (analyst-facing)
+  problems:
+  - id: F1
+    title: Ambiguous questions
+    symptom: “What's AAPL's return today?” before the open, or “return” meaning close-to-close vs open-to-close.
+    who: Analyst
+    agents:
+    - ANALYST
+    solution: ANALYST asks one clarifying question or states the assumption it used (definition, timezone, session).
+    guardrail: Definitions come from the semantic model, not the model's guess.
+  - id: F2
+    title: Wrong SQL that looks right
+    symptom: 'Bad join, wrong grain, wrong filter: a confident wrong number.'
+    who: Analyst
+    agents:
+    - ANALYST
+    - CURATOR
+    solution: ANALYST shows the SQL it ran; CURATOR regression-tests every verified query nightly against sql/08_validation
+      twins.
+    guardrail: Answers without a verified pattern are labelled as such.
+  - id: F3
+    title: Two sources of truth
+    symptom: semantic_model.yaml and semantic_view.sql define metrics separately and drift apart.
+    who: DE + Analyst
+    agents:
+    - CURATOR
+    solution: CURATOR diffs the two definitions on every PR and fails CI on mismatch.
+    guardrail: Single owner signs off on metric changes.
+  - id: F4
+    title: Routing errors
+    symptom: Agent sends a “why did it move” question to SQL only, or a numeric question to search.
+    who: Analyst
+    agents:
+    - CURATOR
+    solution: CURATOR keeps a labelled set of routing examples and scores the agent on it after each instruction
+      change.
+    guardrail: Routing accuracy target agreed before rollout.
+  - id: F5
+    title: RAG problems
+    symptom: News index lags (TARGET_LAG 1 h), wrong-ticker articles (“F” is Ford; “Apple” in a recipe), missing
+      citations.
+    who: Analyst
+    agents:
+    - ANALYST
+    - DQ
+    solution: ANALYST filters search by symbol attribute, always cites, and states article timestamps. DQ measures
+      retrieval precision on a labelled set.
+    guardrail: No citation means no news claim in the answer.
+  - id: F6
+    title: “The data is wrong” that is actually the 15-minute delay
+    symptom: Delayed-entitlement users see older prices than a live screen.
+    who: Analyst
+    agents:
+    - ANALYST
+    solution: ANALYST states the as-of timestamp and entitlement in every price answer.
+    guardrail: Policy enforced in Snowflake; the agent only explains it.
+  - id: F7
+    title: Suspect bars in aggregates
+    symptom: One bad print distorts daily return or volatility.
+    who: Analyst
+    agents:
+    - ANALYST
+    solution: ANALYST checks is_suspect rows in scope and mentions them; offers the figure with and without them.
+    guardrail: Suspect rows are flagged, never silently dropped.
+  - id: F8
+    title: Waiting on engineering for every new metric
+    symptom: ''
+    who: Analyst
+    agents:
+    - CURATOR
+    solution: CURATOR mines unanswered questions from the audit log and drafts new metrics + verified queries as
+      a PR.
+    guardrail: Data engineer reviews every new metric.
+  - id: F9
+    title: Slow or expensive answers
+    symptom: Agent calls time out or cost too much per question.
+    who: Analyst + DE
+    agents:
+    - GUARD
+    - CURATOR
+    solution: GUARD tracks latency and credits per question type; CURATOR adds pre-aggregated views for the heaviest
+      patterns.
+    guardrail: Per-role statement timeout already in sql/09_guardrails.
+- id: G
+  name: Governance, security and cost
+  problems:
+  - id: G1
+    title: Licence leakage
+    symptom: A role that shouldn't see real-time prices gets them through a new grant or a new table.
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD diffs grants daily and checks every new Gold table for the row access policy.
+    guardrail: New grants to REALTIME_DESK always need human approval.
+  - id: G2
+    title: Prompt injection through news
+    symptom: A news article contains text like “ignore your instructions and…”, and the agent reads it as a command.
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD screens retrieved text and the agent treats search results as data only; the agent's role has
+      read-only grants, so even a successful injection cannot change data.
+    guardrail: Least-privilege role is the real defence, not the screen.
+  - id: G3
+    title: Runaway spend
+    symptom: A loop of agent queries or a bad dbt model burns credits overnight.
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD watches metering per warehouse and per role and suspends at the resource-monitor threshold.
+    guardrail: Resource monitor in sql/09_guardrails is the hard stop.
+  - id: G4
+    title: Audit gaps
+    symptom: Can't prove who asked what and what data they saw.
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD reconciles AGENT_QUERY_AUDIT_LOG with QUERY_HISTORY and reports missing entries.
+    guardrail: Audit table is append-only.
+  - id: G5
+    title: Secret rotation
+    symptom: Alpaca keys and Snowflake key pairs expire or leak.
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD tracks key age and reminds before expiry.
+    guardrail: Agents never read or store secret values.
+- id: I
+  name: Data volume and overload
+  problems:
+  - id: I1
+    title: Market-open and close spikes
+    symptom: Volume at 9:30 and 16:00 ET is many times the midday rate; producer, Kafka and Snowpipe Streaming all
+      lag at once.
+    who: DE
+    agents:
+    - SCALE
+    solution: SCALE pre-scales connector tasks and warehouses before the open using the market calendar, then scales
+      back after the spike.
+    guardrail: Schedule pre-approved; hard size cap.
+  - id: I2
+    title: Event-day surges
+    symptom: CPI, FOMC, earnings or a meme-stock day brings sudden, unplanned volume far above normal.
+    who: DE
+    agents:
+    - SCALE
+    - DQ
+    solution: SCALE compares throughput with the same time-of-day baseline, scales within limits, and warns DQ to
+      expect late data.
+    guardrail: Resource-monitor credit ceiling still applies.
+  - id: I3
+    title: Producer backpressure
+    symptom: The producer's send buffer fills; it either drops messages or runs out of memory.
+    who: DE
+    agents:
+    - WATCH
+    solution: WATCH tracks buffer use and send errors and alerts before the buffer is full.
+    guardrail: Producer configured to block, never silently drop.
+  - id: I4
+    title: Kafka broker disk full
+    symptom: A surge plus long retention fills disks; brokers stop accepting writes.
+    who: DE
+    agents:
+    - SCALE
+    solution: SCALE projects time-to-full from the fill rate and proposes retention or disk changes early.
+    guardrail: Retention/disk changes need approval.
+  - id: I5
+    title: Snowpipe Streaming throttling
+    symptom: Client hits throughput or channel limits and starts returning errors.
+    who: DE
+    agents:
+    - WATCH
+    - SCALE
+    solution: WATCH reads client errors; SCALE proposes more channels or connector tasks.
+    guardrail: Changes go through config review.
+  - id: I6
+    title: Warehouse queuing
+    symptom: Tasks, dbt and agent queries compete for compute; queries queue and Silver falls behind at peak.
+    who: DE
+    agents:
+    - SCALE
+    solution: SCALE reads queued time in QUERY_HISTORY and proposes separate or multi-cluster warehouses (ANALYST_WH
+      is already separate).
+    guardrail: Bigger warehouses need approval.
+  - id: I7
+    title: Many analysts at once
+    symptom: Morning question bursts hit Cortex and the warehouse together; answers time out.
+    who: Analyst
+    agents:
+    - GUARD
+    - SCALE
+    solution: GUARD rate-limits per user; SCALE enables multi-cluster scaling for ANALYST_WH within limits.
+    guardrail: Per-role statement timeout stays on.
+  - id: I8
+    title: Huge scans
+    symptom: A broad question makes the agent scan years of trades.
+    who: Analyst + DE
+    agents:
+    - ANALYST
+    - SCALE
+    solution: ANALYST adds a default date range and says so; SCALE suggests clustering keys for the common filters.
+    guardrail: Statement timeout is the hard stop.
+  - id: I9
+    title: Storage growth from churn
+    symptom: MERGE every minute multiplies Time Travel and Fail-safe storage.
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD reports storage per table including Time Travel bytes and proposes transient Bronze or shorter
+      retention.
+    guardrail: Retention changes need approval.
+- id: J
+  name: Outages and recovery (server down)
+  problems:
+  - id: J1
+    title: Alpaca outage or degraded feed
+    symptom: Vendor is down or sending partial data during market hours.
+    who: DE + Analyst
+    agents:
+    - WATCH
+    - ANALYST
+    solution: WATCH detects it, records the window in an OPS outage table; ANALYST tells users that window is incomplete;
+      backfill runs when the vendor recovers.
+    guardrail: Outage windows are recorded, never hidden.
+  - id: J2
+    title: Kafka broker down or quorum lost
+    symptom: Producer can't write.
+    who: DE
+    agents:
+    - WATCH
+    - TRIAGE
+    solution: WATCH detects write failures; TRIAGE pages with the broker state and the data at risk.
+    guardrail: Agents never restart cluster nodes on their own.
+  - id: J3
+    title: Kafka Connect worker crash or rebalance storm
+    symptom: Tasks keep moving between workers and nothing loads.
+    who: DE
+    agents:
+    - WATCH
+    solution: WATCH spots repeated rebalances in the Connect logs and recommends the runbook fix.
+    guardrail: One automated restart, then a human.
+  - id: J4
+    title: Snowflake unavailable
+    symptom: (region incident, or a warehouse can't resume).
+    who: DE
+    agents:
+    - TRIAGE
+    solution: TRIAGE confirms with a probe query and the status page, and works out how long Kafka retention can
+      buffer (see B4). Failover to a second region only if replication is set up.
+    guardrail: Failover is always a human decision.
+  - id: J5
+    title: Cortex unavailable or model not available in the region
+    symptom: Agent questions fail.
+    who: Analyst
+    agents:
+    - ANALYST
+    solution: ANALYST falls back to verified-query results or the direct Cortex Analyst path and says it is in degraded
+      mode.
+    guardrail: No made-up answers in degraded mode.
+  - id: J6
+    title: GCS or Pub/Sub notification outage
+    symptom: Files land but no notification arrives, so nothing loads.
+    who: DE
+    agents:
+    - WATCH
+    solution: WATCH compares the bucket listing with COPY_HISTORY and proposes ALTER PIPE ... REFRESH for the missed
+      window.
+    guardrail: Refresh scoped to the window; approval needed.
+  - id: J7
+    title: Recovery storm
+    symptom: After an outage everything catches up at once and causes a second overload.
+    who: DE
+    agents:
+    - SCALE
+    - DQ
+    solution: SCALE paces the catch-up; DQ confirms completeness for the outage window afterwards.
+    guardrail: Catch-up plan logged with the incident.
+  - id: J8
+    title: Partial outage
+    symptom: Only some symbols or one partition stop; the global “last message” metric still looks fine.
+    who: DE
+    agents:
+    - DQ
+    solution: DQ checks freshness per symbol, not just overall.
+    guardrail: Per-symbol thresholds account for illiquid names.
+  - id: J9
+    title: Bad deploy takes the pipeline down
+    symptom: A SQL or dbt change breaks tasks or corrupts a table.
+    who: DE
+    agents:
+    - DOCTOR
+    solution: DOCTOR links the failure to the change (git history + QUERY_HISTORY) and proposes a rollback or a
+      Time Travel restore (AT/BEFORE, UNDROP).
+    guardrail: Restores need approval.
+- id: K
+  name: Time and timestamp matching
+  problems:
+  - id: K1
+    title: Event time vs load time
+    symptom: trade_ts (when it happened) and _loaded_at (when it arrived) get mixed up; metrics use the wrong one.
+    who: DE + Analyst
+    agents:
+    - DQ
+    - XFORM
+    solution: DQ tracks the lateness distribution (load minus event time); XFORM checks every model aggregates on
+      event time.
+    guardrail: Event-time rule written in AGENTS.md.
+  - id: K2
+    title: Producer clock skew
+    symptom: A host without NTP stamps wrong times; latency comes out negative or impossible.
+    who: DE
+    agents:
+    - WATCH
+    solution: WATCH flags negative or implausible latencies and names the host.
+    guardrail: Fix is NTP on the host, not adjusting data.
+  - id: K3
+    title: Bar timestamp convention
+    symptom: Alpaca stamps a minute bar at the start of the minute; other sources use the end. Joins are off by
+      one minute.
+    who: DE + Analyst
+    agents:
+    - DQ
+    - CURATOR
+    solution: DQ asserts the convention on each source; CURATOR documents it in the semantic model.
+    guardrail: Convention converted at Silver, once.
+  - id: K4
+    title: Trades don't match bars
+    symptom: Bars rebuilt from trades differ from vendor bars (feed coverage, condition filters, boundary inclusive/exclusive).
+    who: DE + Analyst
+    agents:
+    - DQ
+    solution: DQ reconciles rebuilt vs vendor bars within a tolerance and explains each difference type.
+    guardrail: Tolerances agreed with analysts.
+  - id: K5
+    title: Late data after aggregates are built
+    symptom: A bar is final, then a correction arrives.
+    who: DE
+    agents:
+    - DQ
+    solution: DQ measures how late data really arrives so the incremental lookback window (E1) is sized from evidence.
+    guardrail: Lookback set in config, reviewed.
+  - id: K6
+    title: Out-of-order arrival
+    symptom: Messages from different partitions arrive out of sequence; logic that assumes arrival order breaks.
+    who: DE
+    agents:
+    - XFORM
+    solution: XFORM checks every window function orders by event time with a tie-breaker (trade_id).
+    guardrail: Enforced by a dbt test.
+  - id: K7
+    title: Precision truncation
+    symptom: Nanosecond timestamps cut to milliseconds or seconds create duplicate (symbol, ts) keys and MERGE collisions.
+    who: DE
+    agents:
+    - DQ
+    solution: DQ checks key uniqueness and timestamp precision per column.
+    guardrail: Columns declared TIMESTAMP_NTZ(9).
+  - id: K8
+    title: Session timezone vs NTZ
+    symptom: CURRENT_TIMESTAMP() is TIMESTAMP_LTZ; comparing it with a UTC NTZ column depends on the session TIMEZONE.
+      With Snowflake's default America/Los_Angeles, a 15-minute delay rule can hide hours of data. Found in this
+      repo's DELAYED_DATA_POLICY and load-time defaults; fixed to use SYSDATE().
+    who: DE + Analyst
+    agents:
+    - GUARD
+    solution: GUARD tests the policy under several session timezones and fails if the visible window changes.
+    guardrail: Compare against a UTC NTZ value (SYSDATE()); sql/08 checks the delay under two session timezones.
+  - id: K9
+    title: News-to-price alignment
+    symptom: Using updated_at instead of published_at, or the wrong window, pins the wrong article to a price move.
+    who: Analyst
+    agents:
+    - ANALYST
+    solution: ANALYST searches only news published shortly before the move and states the time gap.
+    guardrail: No causal claim without a timestamp.
+  - id: K10
+    title: Trading-day boundary
+    symptom: date_key is the UTC day, so after-hours bars past 8 p.m. ET fall on the next day.
+    who: Analyst
+    agents:
+    - DQ
+    - XFORM
+    solution: DQ flags bars whose UTC date differs from the exchange date; XFORM proposes an exchange-time date_key.
+    guardrail: Metric change also updates CURATOR.
+- id: L
+  name: Market structure and data correctness
+  problems:
+  - id: L1
+    title: Trading halts and LULD pauses
+    symptom: No trades for minutes looks exactly like an outage.
+    who: DE + Analyst
+    agents:
+    - DQ
+    - WATCH
+    solution: DQ checks halt news before raising a gap; WATCH suppresses the outage alert for that symbol.
+    guardrail: Halt windows stored with source.
+  - id: L2
+    title: Listings, delistings, symbol changes
+    symptom: dim_symbols goes stale; the agent says “no data” for a valid ticker.
+    who: DE + Analyst
+    agents:
+    - DQ
+    solution: DQ diffs the symbol master daily and reports adds, removals and renames.
+    guardrail: History kept for inactive symbols.
+  - id: L3
+    title: Bad prints the 10% rule misses
+    symptom: Outliers within 10%, or legitimate moves above it.
+    who: DE + Analyst
+    agents:
+    - DQ
+    solution: DQ scores bars with the ONNX anomaly model alongside is_suspect and reports disagreements.
+    guardrail: Flag only; never delete.
+  - id: L4
+    title: Illiquid gaps
+    symptom: Thin symbols have minutes with no trades; teams disagree on forward-fill.
+    who: Analyst
+    agents:
+    - CURATOR
+    - XFORM
+    solution: CURATOR documents one gap rule; XFORM implements it consistently.
+    guardrail: Rule visible in metric descriptions.
+  - id: L5
+    title: Extended hours mixed with the regular session
+    symptom: Pre- and after-hours distort volume and returns.
+    who: Analyst
+    agents:
+    - ANALYST
+    solution: ANALYST defaults to the regular session and says so; session is a semantic-model dimension.
+    guardrail: Default stated in every answer.
+  - id: L6
+    title: Unit mismatch
+    symptom: A new source reports cents or lots instead of dollars or shares.
+    who: DE
+    agents:
+    - DQ
+    solution: DQ range-checks price and size per symbol against history.
+    guardrail: New sources start in quarantine.
+- id: M
+  name: Concurrency, reprocessing and change
+  problems:
+  - id: M1
+    title: Task overlap
+    symptom: A MERGE takes longer than its schedule; runs are skipped and lag builds.
+    who: DE
+    agents:
+    - DOCTOR
+    solution: DOCTOR compares task duration with the schedule and recommends a new interval or warehouse size.
+    guardrail: ALLOW_OVERLAPPING_EXECUTION stays false.
+  - id: M2
+    title: Lock contention
+    symptom: A backfill MERGE and the streaming MERGE hit the same table; lock waits and timeouts follow.
+    who: DE
+    agents:
+    - DOCTOR
+    solution: DOCTOR finds blocked queries and schedules backfills outside streaming peaks.
+    guardrail: Backfill windows planned in advance.
+  - id: M3
+    title: Reprocessing history
+    symptom: A bug fix means rebuilding months of data without double counting.
+    who: DE
+    agents:
+    - DOCTOR
+    solution: DOCTOR plans the rebuild in a zero-copy clone, compares results, then proposes a swap.
+    guardrail: Swap needs approval; old table kept via Time Travel.
+  - id: M4
+    title: Real-time vs batch disagree
+    symptom: The streaming path and the backfill give different numbers for the same day.
+    who: DE + Analyst
+    agents:
+    - DQ
+    solution: DQ reconciles them daily; after T+1 the batch path is the source of truth.
+    guardrail: Rule documented for analysts.
+  - id: M5
+    title: Environment drift
+    symptom: Dev and prod objects differ, so a change works in dev and fails in prod.
+    who: DE
+    agents:
+    - XFORM
+    solution: XFORM diffs GET_DDL output between environments before deploys.
+    guardrail: Deploys blocked on drift.
+  - id: M6
+    title: Bad data reaches Gold
+    symptom: Wrong numbers are already published.
+    who: DE + Analyst
+    agents:
+    - DOCTOR
+    - ANALYST
+    solution: DOCTOR proposes a Time Travel restore; ANALYST flags answers given during the bad window (from the
+      audit log).
+    guardrail: Restore needs approval; users told.
+- id: N
+  name: Analyst trust and reproducibility
+  problems:
+  - id: N1
+    title: Same question, different answer
+    symptom: Asked at 10:05 and 10:30, numbers differ because of late data and the delay window.
+    who: Analyst
+    agents:
+    - ANALYST
+    solution: ANALYST gives an as-of time with every answer; the audit log keeps the SQL so it can be re-run with
+      Time Travel AT that time.
+    guardrail: Audit log is append-only.
+  - id: N2
+    title: Look-ahead bias
+    symptom: Backtests use corrected prints or news that weren't available at the time.
+    who: Analyst
+    agents:
+    - CURATOR
+    solution: CURATOR provides point-in-time views filtered on _loaded_at.
+    guardrail: Backtest questions use point-in-time views.
+  - id: N3
+    title: Survivorship bias
+    symptom: Delisted symbols missing from history inflate returns.
+    who: Analyst
+    agents:
+    - ANALYST
+    solution: ANALYST includes inactive symbols for historical questions and warns when the universe changed.
+    guardrail: dim_symbols keeps inactive rows.
+  - id: N4
+    title: Metric disputes
+    symptom: Teams calculate VWAP or return differently.
+    who: Analyst
+    agents:
+    - CURATOR
+    solution: CURATOR keeps one definition per metric, with synonyms that map to it.
+    guardrail: Metric owner signs off.
+  - id: N5
+    title: Dashboard load
+    symptom: BI tools refresh Gold every few seconds.
+    who: DE
+    agents:
+    - SCALE
+    - GUARD
+    solution: SCALE routes BI to its own warehouse and relies on the result cache; GUARD reports top consumers.
+    guardrail: Recommendation only.
+  - id: N6
+    title: Questions outside the data
+    symptom: 'Fundamentals, options, other markets: the risk is a made-up answer.'
+    who: Analyst
+    agents:
+    - ANALYST
+    - CURATOR
+    solution: ANALYST says the data isn't available; CURATOR logs it as demand for new data.
+    guardrail: No answer without a source.
+- id: P
+  name: SQL correctness in Snowflake
+  problems:
+  - id: P1
+    title: Join fan-out inflates totals
+    symptom: Joining bars to a table with several rows per symbol (news, for example) repeats each bar, so SUM(volume)
+      is multiplied.
+    who: Analyst + DE
+    agents:
+    - SQLCOACH
+    solution: SQLCOACH checks the grain of both sides of every join and compares row counts before and after the
+      join; it rewrites to aggregate first or use EXISTS.
+    guardrail: Rewrite must return the same rows as the reference query on test data.
+    bad_sql: |
+      SELECT b.symbol, SUM(b.volume) AS volume
+      FROM GOLD.FCT_BARS b
+      JOIN SILVER.NEWS n ON n.symbols ILIKE '%' || b.symbol || '%'
+      GROUP BY b.symbol;
+    good_sql: |
+      SELECT b.symbol, SUM(b.volume) AS volume
+      FROM GOLD.FCT_BARS b
+      WHERE EXISTS (SELECT 1 FROM SILVER.NEWS n
+                    WHERE n.symbols ILIKE '%' || b.symbol || '%')
+      GROUP BY b.symbol;
+  - id: P2
+    title: DISTINCT used to hide duplicates
+    symptom: A bad join creates duplicates and SELECT DISTINCT is added to make them go away; the root cause stays
+      and counts are still wrong elsewhere.
+    who: Analyst + DE
+    agents:
+    - SQLCOACH
+    solution: SQLCOACH flags DISTINCT over joined results, finds the join that duplicates rows, and fixes the join
+      or dedupes explicitly with QUALIFY.
+    guardrail: DISTINCT is accepted only with a comment explaining why.
+    bad_sql: |
+      SELECT DISTINCT t.trade_id, t.price, t.size
+      FROM SILVER.TRADES t
+      JOIN BRONZE.RAW_TRADES r ON r.trade_id = t.trade_id;
+    good_sql: |
+      SELECT trade_id, price, size
+      FROM SILVER.TRADES
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY trade_id ORDER BY _updated_at DESC) = 1;
+  - id: P3
+    title: NOT IN with a NULL returns nothing
+    symptom: If the subquery contains a single NULL, NOT IN is never true and the query silently returns zero rows.
+    who: Analyst + DE
+    agents:
+    - SQLCOACH
+    solution: SQLCOACH rewrites NOT IN (subquery) as NOT EXISTS whenever the subquery column is nullable.
+    guardrail: Rule applied automatically in review; no exceptions.
+    bad_sql: |
+      SELECT symbol FROM GOLD.DIM_SYMBOLS
+      WHERE symbol NOT IN (SELECT symbol FROM SILVER.BARS);
+    good_sql: |
+      SELECT d.symbol FROM GOLD.DIM_SYMBOLS d
+      WHERE NOT EXISTS (SELECT 1 FROM SILVER.BARS b WHERE b.symbol = d.symbol);
+  - id: P4
+    title: NULLs in aggregates and filters
+    symptom: AVG ignores NULLs, COUNT(col) skips them while COUNT(*) does not, and col <> 'X' silently drops NULL
+      rows.
+    who: Analyst
+    agents:
+    - SQLCOACH
+    - ANALYST
+    solution: SQLCOACH flags aggregates and inequality filters on nullable columns and asks for an explicit choice;
+      ANALYST states how NULLs were treated.
+    guardrail: Choice documented in the semantic model metric.
+    bad_sql: |
+      SELECT COUNT(sector) AS symbols
+      FROM GOLD.DIM_SYMBOLS
+      WHERE sector <> 'Technology';
+    good_sql: |
+      SELECT COUNT(*) AS symbols
+      FROM GOLD.DIM_SYMBOLS
+      WHERE sector IS DISTINCT FROM 'Technology';
+  - id: P5
+    title: FLOAT used for money
+    symptom: Prices or notional summed as FLOAT drift by fractions of a cent and equality checks fail.
+    who: DE
+    agents:
+    - SQLCOACH
+    - XFORM
+    solution: SQLCOACH flags FLOAT/DOUBLE on price, notional or vwap columns and casts; XFORM changes the column
+      to NUMBER with fixed scale.
+    guardrail: Column type changes go through RELEASE.
+    bad_sql: |
+      SELECT symbol, SUM(price::FLOAT * size) AS notional
+      FROM SILVER.TRADES GROUP BY symbol;
+    good_sql: |
+      SELECT symbol, SUM(price * size)::NUMBER(18, 4) AS notional
+      FROM SILVER.TRADES GROUP BY symbol;
+  - id: P6
+    title: LIMIT or MAX_BY without a deterministic order
+    symptom: LIMIT without ORDER BY, or ORDER BY with ties, returns a different 'top 10' each run; MAX_BY picks
+      an arbitrary row on ties.
+    who: Analyst
+    agents:
+    - SQLCOACH
+    solution: SQLCOACH requires ORDER BY with a unique tie-breaker for every LIMIT, and a unique ordering key for
+      MAX_BY/MIN_BY.
+    guardrail: Applies to verified queries too.
+    bad_sql: |
+      SELECT symbol, volume FROM GOLD.FCT_BARS
+      ORDER BY volume DESC LIMIT 10;
+    good_sql: |
+      SELECT symbol, bar_ts, volume FROM GOLD.FCT_BARS
+      ORDER BY volume DESC, symbol, bar_ts LIMIT 10;
+  - id: P7
+    title: DATEDIFF counts boundaries, not elapsed time
+    symptom: DATEDIFF('day', '23:59', '00:01 next day') is 1 although two minutes passed; durations come out wrong.
+    who: Analyst + DE
+    agents:
+    - SQLCOACH
+    solution: SQLCOACH flags DATEDIFF at day/hour granularity used as a duration and rewrites using seconds or minutes.
+    guardrail: Boundary counting is allowed when the question is about calendar days.
+    bad_sql: |
+      SELECT DATEDIFF('hour', trade_ts, _loaded_at) AS hours_late
+      FROM SILVER.TRADES;
+    good_sql: |
+      SELECT DATEDIFF('second', trade_ts, _loaded_at) / 3600.0 AS hours_late
+      FROM SILVER.TRADES;
+  - id: P8
+    title: Week boundaries depend on session settings
+    symptom: WEEK_START and WEEK_OF_YEAR_POLICY change DATE_TRUNC('week') and WEEK(); two users get different weekly
+      numbers.
+    who: Analyst
+    agents:
+    - SQLCOACH
+    - CURATOR
+    solution: SQLCOACH flags session-dependent week functions; CURATOR adds one ISO-week column to DIM_DATE so the
+      definition lives in one place.
+    guardrail: Weekly metrics defined once in the semantic model.
+    bad_sql: |
+      SELECT DATE_TRUNC('week', bar_ts) AS wk, SUM(volume)
+      FROM GOLD.FCT_BARS GROUP BY wk;
+    good_sql: |
+      -- ISO week (Monday start); DAYOFWEEKISO ignores WEEK_START
+      SELECT DATEADD('day', 1 - DAYOFWEEKISO(bar_ts), DATE_TRUNC('day', bar_ts)) AS wk,
+             SUM(volume)
+      FROM GOLD.FCT_BARS GROUP BY wk;
+  - id: P9
+    title: Quoted identifiers are case-sensitive
+    symptom: A table created with "Symbol" in quotes (often by pandas write_pandas) can't be queried as symbol;
+      queries fail with 'invalid identifier'.
+    who: DE + Analyst
+    agents:
+    - SQLCOACH
+    solution: SQLCOACH detects mixed-case quoted columns in INFORMATION_SCHEMA and recommends unquoted upper-case
+      names (quote_identifiers=False when loading).
+    guardrail: Naming convention enforced in RELEASE checks.
+    bad_sql: |
+      -- illustrative table
+      CREATE TABLE SILVER.EXTRA ("Symbol" VARCHAR, "Price" NUMBER);
+      SELECT symbol FROM SILVER.EXTRA;   -- invalid identifier
+    good_sql: |
+      -- illustrative table
+      CREATE TABLE SILVER.EXTRA (symbol VARCHAR, price NUMBER);
+      SELECT symbol FROM SILVER.EXTRA;
+  - id: P10
+    title: Semi-structured (VARIANT) traps
+    symptom: raw:price is still VARIANT, so comparisons and sums behave unexpectedly; FLATTEN drops rows with empty
+      arrays unless OUTER => TRUE.
+    who: DE
+    agents:
+    - SQLCOACH
+    solution: SQLCOACH requires an explicit ::type cast on every VARIANT path and OUTER => TRUE where empty arrays
+      must be kept.
+    guardrail: Casting rules applied at Silver.
+    bad_sql: |
+      -- illustrative table with a VARIANT column v
+      SELECT v:symbol, v:price
+      FROM BRONZE.RAW_JSON, LATERAL FLATTEN(input => v:trades)
+      WHERE v:price > 100;
+    good_sql: |
+      -- illustrative table with a VARIANT column v
+      SELECT v:symbol::VARCHAR AS symbol, f.value:price::NUMBER(12,4) AS price
+      FROM BRONZE.RAW_JSON, LATERAL FLATTEN(input => v:trades, OUTER => TRUE) f
+      WHERE f.value:price::NUMBER(12,4) > 100;
+  - id: P11
+    title: Division by zero
+    symptom: One zero denominator (an open price of 0 in a bad print) fails the whole query, or returns infinity
+      downstream.
+    who: Analyst + DE
+    agents:
+    - SQLCOACH
+    solution: SQLCOACH rewrites divisions on columns that can be zero with DIV0NULL or NULLIF.
+    guardrail: Rows that hit the rule are counted and reported, not hidden.
+    bad_sql: |
+      SELECT symbol, (close - open) / open AS bar_return FROM SILVER.BARS;
+    good_sql: |
+      SELECT symbol, DIV0NULL(close - open, open) AS bar_return FROM SILVER.BARS;
+  - id: P12
+    title: UPDATE/MERGE with duplicate source rows
+    symptom: UPDATE ... FROM a source with duplicate keys picks an arbitrary row silently (MERGE errors, UPDATE
+      doesn't by default).
+    who: DE
+    agents:
+    - SQLCOACH
+    - DOCTOR
+    solution: SQLCOACH requires the source of every UPDATE/MERGE to be unique on the join key (QUALIFY ROW_NUMBER()
+      = 1); DOCTOR handles the runtime error case (D3).
+    guardrail: ERROR_ON_NONDETERMINISTIC_UPDATE set to TRUE for pipeline roles.
+    bad_sql: |
+      UPDATE SILVER.SYMBOLS s SET sector = r.sector
+      FROM BRONZE.RAW_SYMBOLS r WHERE r.symbol = s.symbol;
+    good_sql: |
+      UPDATE SILVER.SYMBOLS s SET sector = r.sector
+      FROM (SELECT symbol, sector FROM BRONZE.RAW_SYMBOLS
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY _loaded_at DESC) = 1) r
+      WHERE r.symbol = s.symbol;
+  - id: P13
+    title: String comparison surprises
+    symptom: Comparisons are case-sensitive ('aapl' is not 'AAPL'), trailing spaces don't match, and numbers stored
+      as text sort as text ('100' < '20').
+    who: Analyst + DE
+    agents:
+    - SQLCOACH
+    - DQ
+    solution: SQLCOACH flags comparisons on raw text columns; DQ checks that Silver stores symbols upper-cased and
+      trimmed and numbers as numbers.
+    guardrail: Standardisation happens once, in Silver.
+    bad_sql: |
+      SELECT * FROM BRONZE.RAW_BARS
+      WHERE symbol = 'aapl' AND volume > '1000';
+    good_sql: |
+      SELECT * FROM SILVER.BARS
+      WHERE symbol = UPPER(TRIM('aapl')) AND volume > 1000;
+  - id: P14
+    title: Window frames and partitions
+    symptom: A running total with ORDER BY uses a RANGE frame and includes ties; LAG without PARTITION BY symbol
+      reads the previous symbol's price.
+    who: Analyst + DE
+    agents:
+    - SQLCOACH
+    - XFORM
+    solution: SQLCOACH requires PARTITION BY on per-symbol windows and an explicit ROWS frame; XFORM adds a dbt
+      test for the pattern.
+    guardrail: Enforced by a dbt test (see K6, E5).
+    bad_sql: |
+      SELECT symbol, bar_ts,
+             close / LAG(close) OVER (ORDER BY bar_ts) - 1 AS ret
+      FROM GOLD.FCT_BARS;
+    good_sql: |
+      SELECT symbol, bar_ts,
+             close / LAG(close) OVER (PARTITION BY symbol ORDER BY bar_ts) - 1 AS ret
+      FROM GOLD.FCT_BARS;
+- id: Q
+  name: Performance and query tuning
+  problems:
+  - id: Q1
+    title: Spilling to disk
+    symptom: Large sorts or joins don't fit in warehouse memory and spill to local or remote storage; the query
+      runs many times slower.
+    who: DE + Analyst
+    agents:
+    - SQLCOACH
+    - SCALE
+    solution: SQLCOACH reads bytes_spilled_* in QUERY_HISTORY, filters and aggregates earlier in the query; SCALE
+      suggests a larger warehouse only for that workload.
+    guardrail: Size changes need approval.
+  - id: Q2
+    title: No partition pruning
+    symptom: Wrapping the filter column in a function or casting it makes Snowflake scan every micro-partition.
+    who: DE + Analyst
+    agents:
+    - SQLCOACH
+    solution: SQLCOACH compares partitions_scanned with partitions_total and rewrites filters as ranges on the raw
+      column.
+    guardrail: Rewrite must return identical results.
+    bad_sql: |
+      SELECT * FROM GOLD.FCT_BARS
+      WHERE TO_VARCHAR(bar_ts, 'YYYY-MM-DD') = '2026-10-01';
+    good_sql: |
+      SELECT * FROM GOLD.FCT_BARS
+      WHERE bar_ts >= '2026-10-01' AND bar_ts < '2026-10-02';
+  - id: Q3
+    title: Clustering costs more than it saves
+    symptom: Automatic clustering on a table updated every minute keeps re-clustering and burns credits.
+    who: DE
+    agents:
+    - SQLCOACH
+    - GUARD
+    solution: SQLCOACH checks SYSTEM$CLUSTERING_INFORMATION against the common filters; GUARD compares AUTOMATIC_CLUSTERING_HISTORY
+      credits with query savings.
+    guardrail: Clustering keys changed only through RELEASE.
+  - id: Q4
+    title: Exploding or cartesian joins
+    symptom: A missing or wrong join condition produces billions of rows and a query that never finishes.
+    who: Analyst + DE
+    agents:
+    - SQLCOACH
+    solution: SQLCOACH reads GET_QUERY_OPERATOR_STATS, finds the join whose output rows far exceed its inputs, and
+      names the missing condition.
+    guardrail: Statement timeout stops the runaway first.
+    bad_sql: |
+      SELECT b.symbol, s.sector
+      FROM GOLD.FCT_BARS b, GOLD.DIM_SYMBOLS s;
+    good_sql: |
+      SELECT b.symbol, s.sector
+      FROM GOLD.FCT_BARS b JOIN GOLD.DIM_SYMBOLS s ON s.symbol = b.symbol;
+  - id: Q5
+    title: Slow UDFs
+    symptom: A row-by-row Python or JavaScript UDF does what a built-in SQL function could do.
+    who: DE
+    agents:
+    - SQLCOACH
+    solution: SQLCOACH suggests the built-in equivalent or a vectorised UDF and measures the difference on a clone.
+    guardrail: Recommendation only.
+  - id: Q6
+    title: Wrong warehouse size for the workload
+    symptom: Too large and mostly idle, or too small and queuing and spilling.
+    who: DE
+    agents:
+    - SCALE
+    - GUARD
+    solution: SCALE reads WAREHOUSE_LOAD_HISTORY per warehouse and recommends a size and auto-suspend per workload;
+      GUARD shows the cost effect.
+    guardrail: Changes need approval.
+  - id: Q7
+    title: Slow first queries after resume
+    symptom: After auto-suspend the local cache is empty, so the first dashboard of the morning is slow and users
+      think the system is broken.
+    who: Analyst
+    agents:
+    - ANALYST
+    - SCALE
+    solution: ANALYST explains a cold start when it happens; SCALE tunes auto-suspend for BI hours.
+    guardrail: Longer auto-suspend weighed against idle cost.
+  - id: Q8
+    title: Cached results mislead tuning
+    symptom: The result cache returns a repeated query instantly, so 'my rewrite is faster' comparisons are wrong.
+    who: DE
+    agents:
+    - SQLCOACH
+    solution: SQLCOACH disables USE_CACHED_RESULT when benchmarking and reports both runs.
+    guardrail: Benchmark method recorded with the result.
+  - id: Q9
+    title: Reading columns you don't need
+    symptom: SELECT * on wide tables reads every column; Snowflake is columnar, so unused columns still cost time
+      and credits.
+    who: Analyst + DE
+    agents:
+    - SQLCOACH
+    solution: SQLCOACH replaces SELECT * with the columns actually used downstream.
+    guardrail: SELECT * allowed in ad hoc exploration with LIMIT.
+    bad_sql: |
+      SELECT * FROM GOLD.FCT_TRADES WHERE symbol = 'AAPL';
+    good_sql: |
+      SELECT trade_ts, price, size FROM GOLD.FCT_TRADES WHERE symbol = 'AAPL';
+  - id: Q10
+    title: Thousands of tiny queries
+    symptom: An app loops over symbols and sends one query each; overhead dominates and the warehouse never suspends.
+    who: DE
+    agents:
+    - SQLCOACH
+    solution: SQLCOACH groups identical parameterised queries in QUERY_HISTORY and proposes one set-based query.
+    guardrail: Fix lives in application code, reviewed by RELEASE.
+    bad_sql: |
+      -- run once per symbol from Python
+      SELECT MAX(bar_ts) FROM GOLD.FCT_BARS WHERE symbol = %s;
+    good_sql: |
+      SELECT symbol, MAX(bar_ts) FROM GOLD.FCT_BARS GROUP BY symbol;
+  - id: Q11
+    title: Nobody can read the query profile
+    symptom: People can see a query is slow but not where the time goes.
+    who: DE + Analyst
+    agents:
+    - SQLCOACH
+    solution: 'SQLCOACH summarises GET_QUERY_OPERATOR_STATS in plain words, for example: 78% of time in one join,
+      4 GB spilled, 2% of partitions pruned.'
+    guardrail: Summary links to the raw profile.
+- id: R
+  name: Development to production
+  problems:
+  - id: R1
+    title: No separate environments
+    symptom: Changes are made directly in production.
+    who: DE
+    agents:
+    - RELEASE
+    solution: RELEASE sets up DEV, TEST and PROD databases (TEST as a zero-copy clone of PROD) and checks that only
+      the deploy role can change PROD.
+    guardrail: Direct PROD DDL by people is blocked by role.
+  - id: R2
+    title: Untracked manual changes
+    symptom: Objects are edited in Snowsight and never make it into git.
+    who: DE
+    agents:
+    - RELEASE
+    solution: RELEASE keeps every change as a versioned migration (for example schemachange or Terraform) and diffs
+      GET_DDL against the repo daily.
+    guardrail: Drift opens a ticket; it is never auto-reverted.
+  - id: R3
+    title: Scripts that can't be re-run
+    symptom: CREATE without IF NOT EXISTS or a plain INSERT fails or duplicates data on the second run.
+    who: DE
+    agents:
+    - SQLCOACH
+    - RELEASE
+    solution: SQLCOACH flags non-idempotent statements in review; RELEASE runs every migration twice in CI to prove
+      it.
+    guardrail: Idempotent DDL is a repo convention (AGENTS.md).
+  - id: R4
+    title: CI rebuilds everything
+    symptom: dbt CI runs all models on every pull request; reviews take an hour.
+    who: DE
+    agents:
+    - RELEASE
+    solution: RELEASE runs only changed models and their children (state:modified+) and defers the rest to the production
+      manifest.
+    guardrail: Full build still runs nightly.
+  - id: R5
+    title: Tests pass on tiny dev data
+    symptom: Dev has a few rows; production fails on volume, duplicates or edge cases.
+    who: DE
+    agents:
+    - RELEASE
+    solution: RELEASE runs CI against a zero-copy clone of production so tests see real data at no storage cost.
+    guardrail: Clones dropped after the run.
+  - id: R6
+    title: Breaking changes for consumers
+    symptom: Renaming or dropping a column breaks dashboards, saved worksheets and the agent's semantic model.
+    who: DE + Analyst
+    agents:
+    - RELEASE
+    - CURATOR
+    solution: RELEASE runs impact analysis (dbt lineage, OBJECT_DEPENDENCIES, ACCESS_HISTORY for who read the column
+      in 30 days, semantic model references); CURATOR updates the semantic model in the same change.
+    guardrail: Breaking changes need a deprecation period.
+  - id: R7
+    title: No data contracts
+    symptom: An upstream team changes a type or drops a column and downstream models break.
+    who: DE
+    agents:
+    - RELEASE
+    - XFORM
+    solution: RELEASE turns on dbt model contracts for Gold; XFORM keeps the contract in sync with the model.
+    guardrail: Contract changes need both owners.
+  - id: R8
+    title: Rolling back a release
+    symptom: Code rolls back easily; data written by the bad version does not.
+    who: DE
+    agents:
+    - RELEASE
+    - DOCTOR
+    solution: 'RELEASE plans each release with a rollback: a clone of affected tables before deploy and ALTER TABLE
+      ... SWAP WITH to restore; DOCTOR runs it if needed.'
+    guardrail: Swap needs approval.
+  - id: R9
+    title: Deploy order wrong
+    symptom: Objects depend on each other; deploying in the wrong order fails (this repo's README run-order bug).
+    who: DE
+    agents:
+    - RELEASE
+    solution: RELEASE builds the dependency order and proves it by deploying to an empty database in CI.
+    guardrail: A deploy that fails on an empty database is blocked.
+  - id: R10
+    title: Secrets in code
+    symptom: Passwords or keys committed to git or pasted into SQL files.
+    who: DE
+    agents:
+    - RELEASE
+    - GUARD
+    solution: RELEASE runs secret scanning on every pull request; GUARD rotates anything found.
+    guardrail: A found secret is treated as leaked.
+  - id: R11
+    title: Deploying while tasks are writing
+    symptom: A table changes while a task is mid-MERGE; the task fails or writes to the old shape.
+    who: DE
+    agents:
+    - RELEASE
+    - DOCTOR
+    solution: RELEASE suspends the affected tasks, deploys, then resumes them in dependency order; DOCTOR verifies
+      they caught up.
+    guardrail: Deploy plan lists every task touched.
+  - id: R12
+    title: Unknown lineage
+    symptom: '''What feeds this number?'' takes a day to answer.'
+    who: DE + Analyst
+    agents:
+    - RELEASE
+    - CURATOR
+    solution: RELEASE and CURATOR answer from dbt docs, OBJECT_DEPENDENCIES and ACCESS_HISTORY, from source to semantic
+      metric.
+    guardrail: Lineage regenerated on every deploy.
+- id: S
+  name: Security and access
+  problems:
+  - id: S1
+    title: Role sprawl
+    symptom: Hundreds of roles and grants; nobody knows who can see what.
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD maps the role hierarchy, finds grants unused for 90 days in ACCESS_HISTORY, and proposes removals.
+    guardrail: Removals need the data owner's approval.
+  - id: S2
+    title: Objects owned by people who left
+    symptom: Tables and tasks owned by a personal role can't be changed once that person leaves.
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD finds objects owned by personal roles and proposes GRANT OWNERSHIP ... COPY CURRENT GRANTS to
+      a functional role.
+    guardrail: Ownership transfer needs approval.
+  - id: S3
+    title: Owners grant access around the rules
+    symptom: Whoever owns a table can grant it to anyone, bypassing central access control.
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD recommends WITH MANAGED ACCESS on GOLD so only the security role grants access.
+    guardrail: Schema change goes through RELEASE.
+  - id: S4
+    title: ACCOUNTADMIN used for daily work
+    symptom: People run everyday queries with the most powerful role.
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD reports queries run as ACCOUNTADMIN or SECURITYADMIN and who ran them.
+    guardrail: Report only; humans follow up.
+  - id: S5
+    title: Service accounts with passwords
+    symptom: Connectors and apps log in with a username and password.
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD lists users with password authentication and recommends TYPE = SERVICE with key-pair or OAuth,
+      plus a rotation schedule.
+    guardrail: Agents never handle secret values.
+  - id: S6
+    title: No network policy
+    symptom: The account accepts logins from anywhere on the internet.
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD checks for account and user network policies and drafts one from LOGIN_HISTORY source IPs.
+    guardrail: Applying a policy needs approval (it can lock people out).
+  - id: S7
+    title: Human users without MFA or SSO
+    symptom: Password-only logins for people.
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD reports human logins without a second factor from LOGIN_HISTORY.
+    guardrail: Report only.
+  - id: S8
+    title: Sensitive data not tagged
+    symptom: New columns with personal or sensitive text (for example questions stored in the audit log) have no
+      tags or masking.
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD runs Snowflake data classification on new tables and proposes tags and masking policies.
+    guardrail: Tags and policies applied through RELEASE.
+  - id: S9
+    title: Agent role has more access than it needs
+    symptom: ANALYST_AGENT is granted Silver or Bronze, so it can bypass the semantic layer and the delay policy's
+      intent.
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD checks ANALYST_AGENT can only read Gold, the semantic view and the search service, and alerts
+      on anything else.
+    guardrail: Any new agent grant needs approval.
+- id: T
+  name: Cost
+  problems:
+  - id: T1
+    title: No cost attribution
+    symptom: Nobody can say which team, agent or dashboard spends the credits.
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD requires a QUERY_TAG per app and agent and reports spend from QUERY_ATTRIBUTION_HISTORY by tag,
+      user and warehouse.
+    guardrail: Untagged queries are reported.
+  - id: T2
+    title: Idle warehouses
+    symptom: Auto-suspend set to 10+ minutes, or never, on warehouses used in short bursts.
+    who: DE
+    agents:
+    - GUARD
+    - SCALE
+    solution: GUARD flags long auto-suspend on interactive warehouses; SCALE recommends a value from the query pattern.
+    guardrail: Changes need approval.
+  - id: T3
+    title: Hidden serverless costs
+    symptom: Snowpipe, Snowpipe Streaming, serverless tasks, Dynamic Table refreshes, search optimisation, automatic
+      clustering, Cortex Search and Cortex models bill outside warehouses.
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD reports METERING_HISTORY by service type every day, with week-over-week change.
+    guardrail: Spikes over a threshold page the owner.
+  - id: T4
+    title: Expensive dev copies
+    symptom: Full copies instead of zero-copy clones, or long Time Travel on dev databases.
+    who: DE
+    agents:
+    - GUARD
+    - RELEASE
+    solution: GUARD flags dev tables that aren't clones and dev databases with long retention; RELEASE uses clones
+      by default.
+    guardrail: Recommendation only.
+  - id: T5
+    title: Schedules faster than the data
+    symptom: A task runs every minute when data arrives every five; a Dynamic Table's TARGET_LAG is tighter than
+      anyone needs.
+    who: DE
+    agents:
+    - GUARD
+    - DOCTOR
+    solution: GUARD compares data arrival rate with refresh frequency; DOCTOR proposes the slower schedule.
+    guardrail: Freshness requirement agreed with analysts first.
+  - id: T6
+    title: The same heavy query, again and again
+    symptom: Many dashboards run the same expensive query.
+    who: DE + Analyst
+    agents:
+    - GUARD
+    - CURATOR
+    solution: GUARD finds repeated heavy queries; CURATOR proposes a materialised table or view the semantic model
+      can use.
+    guardrail: New objects go through RELEASE.
+  - id: T7
+    title: No budget, surprise bill
+    symptom: Spend is noticed only when the invoice arrives.
+    who: DE
+    agents:
+    - GUARD
+    solution: GUARD sets budgets and resource monitors per warehouse and per agent, with alerts at 50/80/100%.
+    guardrail: The resource monitor in sql/09_guardrails is the hard stop.
+  - id: T8
+    title: Unknown cost per agent question
+    symptom: LLM and Cortex Analyst costs per question aren't tracked.
+    who: DE + Analyst
+    agents:
+    - GUARD
+    solution: GUARD joins Cortex usage history with the agent audit log to report cost per question type and per
+      user.
+    guardrail: Per-user daily limits if needed.
+- id: U
+  name: Analyst self-service
+  problems:
+  - id: U1
+    title: Can't find the right table
+    symptom: RAW_BARS, SILVER.BARS, FCT_BARS and SYMBOLS_DT all look like 'the bars table'.
+    who: Analyst
+    agents:
+    - ANALYST
+    - CURATOR
+    solution: CURATOR tags certified Gold objects and writes 'use this, not that' notes; ANALYST answers 'where
+      is X' questions from them.
+    guardrail: Only Gold is certified for analysis.
+  - id: U2
+    title: Columns without descriptions
+    symptom: Nobody knows what bar_return or is_suspect means exactly.
+    who: Analyst
+    agents:
+    - CURATOR
+    solution: CURATOR fills column COMMENTs from dbt schema.yml and the semantic model, so the same text appears
+      everywhere.
+    guardrail: Descriptions reviewed with the metric owner.
+  - id: U3
+    title: BI connections time out
+    symptom: Tableau, Power BI or Excel extracts hit timeouts or row limits.
+    who: Analyst
+    agents:
+    - ANALYST
+    - SCALE
+    solution: ANALYST suggests an aggregated query or view; SCALE gives BI its own warehouse.
+    guardrail: Statement timeout stays in place.
+  - id: U4
+    title: Millions of rows into Excel
+    symptom: Analysts try to export far more rows than a spreadsheet can hold.
+    who: Analyst
+    agents:
+    - ANALYST
+    solution: ANALYST proposes aggregation first, or an unload to a stage (COPY INTO @stage) for genuinely large
+      extracts.
+    guardrail: Unloads follow data-sharing rules (feed licence).
+  - id: U5
+    title: Saved queries break after a change
+    symptom: Worksheets and dashboards reference a renamed column.
+    who: Analyst
+    agents:
+    - RELEASE
+    - CURATOR
+    solution: RELEASE's impact analysis (R6) lists affected users from ACCESS_HISTORY; CURATOR notifies them before
+      the change ships.
+    guardrail: Deprecation period for breaking changes.
+  - id: U6
+    title: Numbers don't match another system
+    symptom: Finance or a vendor terminal shows a different figure.
+    who: Analyst
+    agents:
+    - DQ
+    - ANALYST
+    solution: 'DQ and ANALYST produce a reconciliation that names each difference: definition, cut-off time, timezone,
+      feed coverage or scope.'
+    guardrail: Reconciliations are saved and reused.
+  - id: U7
+    title: Copy-pasting old SQL
+    symptom: Analysts copy old queries, bugs included.
+    who: Analyst
+    agents:
+    - SQLCOACH
+    - CURATOR
+    solution: CURATOR keeps a library of verified queries; SQLCOACH reviews new queries against the patterns in
+      section P.
+    guardrail: Library entries have owners.
+  - id: U8
+    title: '''Does not exist or not authorized'''
+    symptom: Analysts get a permission error with no explanation.
+    who: Analyst
+    agents:
+    - ANALYST
+    - GUARD
+    solution: ANALYST explains which role grants access and how to request it; GUARD routes the request to the data
+      owner.
+    guardrail: Agents never grant access themselves.
+  - id: U9
+    title: Working from stale extracts
+    symptom: Analysts download data, work offline, and report outdated numbers.
+    who: Analyst
+    agents:
+    - ANALYST
+    solution: ANALYST encourages live queries and stamps every answer with an as-of time.
+    guardrail: As-of time on every answer.
+- id: O
+  name: Operations and people
+  problems:
+  - id: O1
+    title: Root cause spans six systems
+    symptom: A stale Gold number could start in Alpaca, Kafka, Snowpipe, a task, dbt or the agent.
+    who: DE
+    agents:
+    - TRIAGE
+    solution: TRIAGE walks the chain upstream, asking each specialist agent for its health, and returns the first
+      broken link with evidence.
+    guardrail: Summary goes to a human; actions stay with specialists.
+  - id: O2
+    title: Reconciliation across layers
+    symptom: Kafka offsets vs Bronze rows vs Silver vs Gold don't add up.
+    who: DE
+    agents:
+    - DQ
+    solution: DQ runs per-hour count reconciliation and reports the layer where rows disappear.
+    guardrail: Tolerances set per layer (dedupe expected in Silver).
+  - id: O3
+    title: Alert fatigue
+    symptom: Dozens of alerts for one root cause.
+    who: DE
+    agents:
+    - TRIAGE
+    solution: TRIAGE groups related alerts into one incident with a timeline.
+    guardrail: Raw alerts still logged.
+  - id: O4
+    title: Tribal knowledge and missing runbooks
+    symptom: Only one person knows how to fix a stale stream.
+    who: DE
+    agents:
+    - TRIAGE
+    solution: Every agent fix is written as a runbook step first; TRIAGE writes a post-incident note proposing a
+      new runbook entry.
+    guardrail: Runbooks reviewed and versioned in git.
+  - id: O5
+    title: No CI, no tests (this repo's current gap)
+    symptom: Changes reach Snowflake untested.
+    who: DE
+    agents:
+    - XFORM
+    solution: XFORM runs dbt parse/test and Python tests on every PR once CI exists.
+    guardrail: Build pytest + CI first (README Target items).
+training:
+- agent: WATCH
+  knowledge: Runbooks for each stage of ingestion; market calendar rules; Kafka/Connect error catalogue.
+  scenarios: 'Fault injection with replay_sample_data.py: kill producer, drop minutes, duplicate bursts, malformed
+    rows, pause connector.'
+  pass_criteria: Detects fault within N minutes; correct root cause; correct runbook step; zero alerts on closed-market
+    periods.
+- agent: DOCTOR
+  knowledge: Task/stream/dbt failure catalogue with fixes; dbt DAG.
+  scenarios: 'Break things on a dev account: let a stream go stale, suspend a task, insert duplicate keys, fail
+    a dbt test.'
+  pass_criteria: Correct classification; failing rows returned; never weakens a test.
+- agent: DQ
+  knowledge: 'Expected shapes: 390 bars per session, price bands, null-rate baselines, corporate-action rules.'
+  scenarios: Inject splits, bad prints, gaps, halts, timezone shifts, clock skew, ms truncation, late and out-of-order
+    rows into generated sample data.
+  pass_criteria: Precision/recall on injected faults; explained vs unexplained moves.
+- agent: XFORM
+  knowledge: AGENTS.md conventions; dbt style; schema contracts.
+  scenarios: Historical schema changes replayed as tasks; known bugs (e.g. GOLD_GOLD, lost policy) as test cases.
+  pass_criteria: PR passes CI; reviewer accepts without major changes.
+- agent: ANALYST
+  knowledge: Semantic model, metric definitions, delay/entitlement rules, citation rules.
+  scenarios: 'Question bank: verified queries, ambiguous questions, adversarial questions, news questions. Plus
+    self-service questions: ''where is X'', permission errors, huge export requests, mismatches with another system.'
+  pass_criteria: Numeric answers match sql/08 twins; routing accuracy; citation present; correct clarification rate.
+- agent: CURATOR
+  knowledge: Both semantic definitions; audit log; feedback table.
+  scenarios: Seed failed/unanswered questions; seed YAML vs semantic-view mismatches.
+  pass_criteria: Mismatch detection rate; accepted metric PRs.
+- agent: GUARD
+  knowledge: Policy model (who sees real-time); cost budgets; injection patterns.
+  scenarios: 'Add a grant, create an unprotected table, plant injection text in sample_news.csv, run a cost spike,
+    query the policy under different session timezones. Plus: an unused grant, an object owned by a departed user''s
+    role, ACCOUNTADMIN daily use, an idle warehouse, untagged queries.'
+  pass_criteria: Every planted violation detected; no false sev-1.
+- agent: SCALE
+  knowledge: Time-of-day volume baselines; macro-event calendar; capacity limits of each component.
+  scenarios: replay_sample_data.py at 10x-50x --speedup; stop the Kafka container; suspend a warehouse; fill a test
+    broker's disk.
+  pass_criteria: Lag recovers within the agreed time; no credit overrun; no data lost; catch-up paced.
+- agent: SQLCOACH
+  knowledge: Sections P and Q of this catalog with their bad/good SQL pairs; Snowflake SQL semantics (NULLs, VARIANT,
+    windows, DATEDIFF, pruning).
+  scenarios: Each bad_sql runs on a clone seeded so the bug changes the answer (a NULL in a subquery, duplicate
+    news rows, ties at the LIMIT boundary); slow queries built to spill or skip pruning.
+  pass_criteria: Names the right problem ID; rewrite returns exactly the good_sql result; partitions scanned or
+    bytes spilled go down for Q problems.
+- agent: RELEASE
+  knowledge: Environment layout, migration conventions, dependency order, rollback plans, AGENTS.md rules.
+  scenarios: This repo's real history replayed as pull requests (GOLD_GOLD schema, wrong run order, policy lost
+    on rebuild, session-timezone bug); drift injected in DEV; a column rename with live consumers.
+  pass_criteria: Catches each bug before merge; deploy order proven on an empty database; impact analysis lists
+    every affected consumer.
+- agent: TRIAGE
+  knowledge: Dependency graph of the stack; escalation policy.
+  scenarios: Composite incidents built from the scenarios above.
+  pass_criteria: First broken link identified; one incident per root cause.

@@ -23,5 +23,6 @@ skl2onnx
 onnx
 # snowflake-ml-python
 
-# docs/ (build_playbook.py regenerates the agent playbook PDF)
+# docs/ (build_playbook.py validates knowledge/problem_catalog.yaml and renders the PDF)
 reportlab
+pyyaml

@@ -69,13 +69,15 @@ snowflake-ai-data-agent/
 ├── semantic_layer/
 │   ├── semantic_model.yaml             # Cortex Analyst YAML (custom window-function metrics)
 │   └── semantic_view.sql               # native CREATE SEMANTIC VIEW (what Cortex Agents/MCP query)
+├── knowledge/
+│   └── problem_catalog.yaml            # agent knowledge: every problem, owning agent, fix, guardrail, bad/good SQL; source of the PDF
 ├── requirements.txt                    # single flat file for the whole repo's Python deps
 └── docs/
     ├── PORTFOLIO_BRIEF.md              # reasoning history behind domain/architecture decisions
     ├── agent-and-governance-flow.md    # deep dive on the flow with the most entry points
     ├── restructure-proposal.md         # suggested layout changes -- proposals only, not applied
-    ├── snowflake-e2e-agent-playbook.pdf  # 95 real-time problems, the agent for each, how agents are trained (plan, not built)
-    └── build_playbook.py               # regenerates the playbook PDF from the data structures inside it
+    ├── snowflake-e2e-agent-playbook.pdf  # 158 problems, the agent for each, how agents are trained (plan, not built)
+    └── build_playbook.py               # validates knowledge/problem_catalog.yaml and renders it to the PDF
 ```
 
 ---
@@ -379,7 +381,7 @@ The Gold tables are created by dbt, so the steps that read from or attach to the
 | `cd ui && streamlit run streamlit_app.py` | Start the chat UI (must run with `ui/` as CWD — see note below) |
 | `cd api && uvicorn main:app --reload` | Start the FastAPI service (must run with `api/` as CWD — see note below) |
 | `python snowpark/train_anomaly_model.py` | Train + export the ONNX anomaly model locally |
-| `python docs/build_playbook.py` | Regenerate `docs/snowflake-e2e-agent-playbook.pdf` after editing the problem/agent lists in the script |
+| `python docs/build_playbook.py` | Validate `knowledge/problem_catalog.yaml` and regenerate `docs/snowflake-e2e-agent-playbook.pdf` from it |
 
 **Note on `ui/` and `api/`**: both scripts do `sys.path.insert(0, "../agent")`
 to import from `agent/`, and that path is resolved relative to the process's
