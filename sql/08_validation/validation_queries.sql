@@ -3,18 +3,21 @@
 -- here. Run the agent's answer and this query side by side; log any mismatch.
 -- Note: these will reflect the same 15-minute-delayed view as the agent unless
 -- run as a REALTIME_DESK role — see sql/07_governance.
+-- "Today" is SYSDATE()::DATE (the UTC date), matching date_key, which is
+-- truncated from UTC bar timestamps. CURRENT_DATE() would use the session's
+-- TIMEZONE and pick the wrong day for part of every 24 hours.
 
 -- Mirrors "todays_return_by_symbol"
 SELECT symbol,
        (MAX_BY(close, bar_ts) - MIN_BY(open, bar_ts)) / NULLIF(MIN_BY(open, bar_ts), 0) AS period_return
 FROM MARKET_AGENT.GOLD.FCT_BARS
-WHERE symbol = 'AAPL' AND date_key = CURRENT_DATE()
+WHERE symbol = 'AAPL' AND date_key = SYSDATE()::DATE
 GROUP BY symbol;
 
 -- Mirrors "highest_volatility_symbols_today"
 SELECT symbol, AVG(rolling_volatility_30) AS volatility
 FROM MARKET_AGENT.GOLD.FCT_BARS
-WHERE date_key = CURRENT_DATE()
+WHERE date_key = SYSDATE()::DATE
 GROUP BY symbol
 ORDER BY volatility DESC
 LIMIT 10;
@@ -25,14 +28,14 @@ LIMIT 10;
 -- any aggregate metric that includes it.
 SELECT symbol, bar_ts, open, close, bar_return
 FROM MARKET_AGENT.GOLD.FCT_BARS
-WHERE date_key = CURRENT_DATE() AND is_suspect
+WHERE date_key = SYSDATE()::DATE AND is_suspect
 ORDER BY ABS(bar_return) DESC;
 
 -- Mirrors "total_volume_by_sector"
 SELECT s.sector, SUM(b.volume) AS total_volume
 FROM MARKET_AGENT.GOLD.FCT_BARS b
 JOIN MARKET_AGENT.GOLD.DIM_SYMBOLS s ON b.symbol = s.symbol
-WHERE b.date_key = CURRENT_DATE()
+WHERE b.date_key = SYSDATE()::DATE
 GROUP BY s.sector
 ORDER BY total_volume DESC;
 
@@ -51,3 +54,17 @@ UNION ALL
 SELECT ref_entity_name, ref_column_name, policy_name, policy_status
 FROM TABLE(MARKET_AGENT.INFORMATION_SCHEMA.POLICY_REFERENCES(
   ref_entity_name => 'MARKET_AGENT.GOLD.FCT_BARS', ref_entity_domain => 'table'));
+
+-- Governance check: the delay window must not depend on the session timezone.
+-- Run as ANALYST_AGENT during market hours. visible_lag_minutes should be about
+-- 15 (plus ingestion latency) for BOTH settings. If the Los Angeles run shows
+-- ~435-495 minutes, DELAYED_DATA_POLICY is comparing NTZ with LTZ again.
+ALTER SESSION SET TIMEZONE = 'UTC';
+SELECT 'UTC' AS session_tz, DATEDIFF('minute', MAX(bar_ts), SYSDATE()) AS visible_lag_minutes
+FROM MARKET_AGENT.GOLD.FCT_BARS;
+
+ALTER SESSION SET TIMEZONE = 'America/Los_Angeles';
+SELECT 'America/Los_Angeles' AS session_tz, DATEDIFF('minute', MAX(bar_ts), SYSDATE()) AS visible_lag_minutes
+FROM MARKET_AGENT.GOLD.FCT_BARS;
+
+ALTER SESSION UNSET TIMEZONE;

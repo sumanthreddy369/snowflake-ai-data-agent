@@ -176,7 +176,7 @@ verified_queries:
       SELECT symbol,
              (MAX_BY(close, bar_ts) - MIN_BY(open, bar_ts)) / NULLIF(MIN_BY(open, bar_ts), 0) AS period_return
       FROM MARKET_AGENT.GOLD.FCT_BARS
-      WHERE symbol = 'AAPL' AND date_key = CURRENT_DATE()
+      WHERE symbol = 'AAPL' AND date_key = SYSDATE()::DATE
       GROUP BY symbol;
     use_as_onboarding_question: true
 
@@ -185,7 +185,7 @@ verified_queries:
     sql: >
       SELECT symbol, AVG(rolling_volatility_30) AS volatility
       FROM MARKET_AGENT.GOLD.FCT_BARS
-      WHERE date_key = CURRENT_DATE()
+      WHERE date_key = SYSDATE()::DATE
       GROUP BY symbol
       ORDER BY volatility DESC
       LIMIT 10;
@@ -195,7 +195,7 @@ verified_queries:
     sql: >
       SELECT symbol, bar_ts, open, close, bar_return
       FROM MARKET_AGENT.GOLD.FCT_BARS
-      WHERE date_key = CURRENT_DATE() AND is_suspect
+      WHERE date_key = SYSDATE()::DATE AND is_suspect
       ORDER BY ABS(bar_return) DESC;
 
   - name: total_volume_by_sector
@@ -204,6 +204,6 @@ verified_queries:
       SELECT s.sector, SUM(b.volume) AS total_volume
       FROM MARKET_AGENT.GOLD.FCT_BARS b
       JOIN MARKET_AGENT.GOLD.DIM_SYMBOLS s ON b.symbol = s.symbol
-      WHERE b.date_key = CURRENT_DATE()
+      WHERE b.date_key = SYSDATE()::DATE
       GROUP BY s.sector
       ORDER BY total_volume DESC;

@@ -55,7 +55,14 @@ GRANT SELECT ON FUTURE TABLES IN SCHEMA MARKET_AGENT.GOLD TO ROLE REALTIME_DESK;
 CREATE ROW ACCESS POLICY IF NOT EXISTS MARKET_AGENT.GOLD.DELAYED_DATA_POLICY
   AS (row_ts TIMESTAMP_NTZ) RETURNS BOOLEAN ->
     IS_ROLE_IN_SESSION('REALTIME_DESK')
-    OR row_ts <= DATEADD('minute', -15, CURRENT_TIMESTAMP());
+    OR row_ts <= DATEADD('minute', -15, SYSDATE());
+-- SYSDATE(), not CURRENT_TIMESTAMP(): row_ts is TIMESTAMP_NTZ holding UTC wall
+-- time, and SYSDATE() is the current UTC time as TIMESTAMP_NTZ, so this is a
+-- like-for-like comparison. CURRENT_TIMESTAMP() is TIMESTAMP_LTZ, and comparing
+-- it with an NTZ column makes Snowflake read row_ts in the session's TIMEZONE --
+-- with the account default (America/Los_Angeles) that turns the 15-minute
+-- delay into roughly 7-8 hours, and the window shifts per user's session
+-- setting. sql/08_validation has a check for this.
 
 -- The policy is attached to FCT_TRADES.trade_ts and FCT_BARS.bar_ts by a dbt
 -- post-hook in each model (dbt/models/marts/fct_*.sql), not by ALTER TABLE

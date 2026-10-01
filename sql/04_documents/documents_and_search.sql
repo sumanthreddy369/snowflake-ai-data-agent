@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS MARKET_AGENT.BRONZE.RAW_NEWS (
   source        VARCHAR,
   url           VARCHAR,
   published_at  VARCHAR,   -- raw string; parsed/cast in Silver
-  _loaded_at    TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+  _loaded_at    TIMESTAMP_NTZ DEFAULT SYSDATE(),
   _source_file  VARCHAR DEFAULT METADATA$FILENAME
 );
 
@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS MARKET_AGENT.SILVER.NEWS (
   source        VARCHAR,
   url           VARCHAR,
   published_at  TIMESTAMP_NTZ,
-  _updated_at   TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+  _updated_at   TIMESTAMP_NTZ DEFAULT SYSDATE()
 );
 
 CREATE STREAM IF NOT EXISTS MARKET_AGENT.BRONZE.RAW_NEWS_STREAM
@@ -52,7 +52,7 @@ ON tgt.news_id = src.news_id
 WHEN MATCHED THEN UPDATE SET
   headline = src.headline, summary = src.summary, content = src.content,
   symbols = src.symbols, source = src.source, url = src.url,
-  published_at = src.published_at, _updated_at = CURRENT_TIMESTAMP()
+  published_at = src.published_at, _updated_at = SYSDATE()
 WHEN NOT MATCHED THEN INSERT
   (news_id, headline, summary, content, symbols, source, url, published_at)
   VALUES (src.news_id, src.headline, src.summary, src.content, src.symbols, src.source, src.url, src.published_at);

@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS MARKET_AGENT.SILVER.TRADES (
   exchange_code     VARCHAR,
   conditions        VARCHAR,
   trade_ts          TIMESTAMP_NTZ,
-  _updated_at       TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+  _updated_at       TIMESTAMP_NTZ DEFAULT SYSDATE()
 );
 
 CREATE TABLE IF NOT EXISTS MARKET_AGENT.SILVER.BARS (
@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS MARKET_AGENT.SILVER.BARS (
   volume            NUMBER,
   vwap              NUMBER(12, 4),
   trade_count       NUMBER,
-  _updated_at       TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+  _updated_at       TIMESTAMP_NTZ DEFAULT SYSDATE(),
   PRIMARY KEY (symbol, bar_ts)
 );
 
@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS MARKET_AGENT.SILVER.SYMBOLS (
   sector            VARCHAR,
   exchange          VARCHAR,
   is_active         BOOLEAN,
-  _updated_at       TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+  _updated_at       TIMESTAMP_NTZ DEFAULT SYSDATE()
 );
 
 -- Streams: one per Bronze table, capturing inserts since last consumed.
@@ -76,7 +76,7 @@ USING (
 ON tgt.trade_id = src.trade_id
 WHEN MATCHED THEN UPDATE SET
   symbol = src.symbol, price = src.price, size = src.size, exchange_code = src.exchange_code,
-  conditions = src.conditions, trade_ts = src.trade_ts, _updated_at = CURRENT_TIMESTAMP()
+  conditions = src.conditions, trade_ts = src.trade_ts, _updated_at = SYSDATE()
 WHEN NOT MATCHED THEN INSERT
   (trade_id, symbol, price, size, exchange_code, conditions, trade_ts)
   VALUES (src.trade_id, src.symbol, src.price, src.size, src.exchange_code, src.conditions, src.trade_ts);
@@ -105,7 +105,7 @@ USING (
 ON tgt.symbol = src.symbol AND tgt.bar_ts = src.bar_ts
 WHEN MATCHED THEN UPDATE SET
   open = src.open, high = src.high, low = src.low, close = src.close, volume = src.volume,
-  vwap = src.vwap, trade_count = src.trade_count, _updated_at = CURRENT_TIMESTAMP()
+  vwap = src.vwap, trade_count = src.trade_count, _updated_at = SYSDATE()
 WHEN NOT MATCHED THEN INSERT
   (symbol, bar_ts, open, high, low, close, volume, vwap, trade_count)
   VALUES (src.symbol, src.bar_ts, src.open, src.high, src.low, src.close, src.volume, src.vwap, src.trade_count);
@@ -130,7 +130,7 @@ USING (
 ON tgt.symbol = src.symbol
 WHEN MATCHED THEN UPDATE SET
   company_name = src.company_name, sector = src.sector, exchange = src.exchange,
-  is_active = src.is_active, _updated_at = CURRENT_TIMESTAMP()
+  is_active = src.is_active, _updated_at = SYSDATE()
 WHEN NOT MATCHED THEN INSERT
   (symbol, company_name, sector, exchange, is_active)
   VALUES (src.symbol, src.company_name, src.sector, src.exchange, src.is_active);

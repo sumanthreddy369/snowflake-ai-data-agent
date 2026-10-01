@@ -71,7 +71,7 @@ def get_flagged_anomalies(symbol: str | None = None) -> str:
         query = """
             SELECT symbol, bar_ts, open, close, bar_return
             FROM MARKET_AGENT.GOLD.FCT_BARS
-            WHERE date_key = CURRENT_DATE() AND is_suspect
+            WHERE date_key = SYSDATE()::DATE AND is_suspect
         """
         params = ()
         if symbol:
