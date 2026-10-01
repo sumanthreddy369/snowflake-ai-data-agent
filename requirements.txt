@@ -22,3 +22,6 @@ scikit-learn
 skl2onnx
 onnx
 # snowflake-ml-python
+
+# docs/ (build_playbook.py regenerates the agent playbook PDF)
+reportlab
