@@ -348,10 +348,12 @@ def build(out: Path, cat: Catalog) -> None:
         "and analysts actually meet them, assigns each one to an agent, and sets out how each agent is trained and "
         "tested before it is trusted."))
     st.append(note(
-        "<b>Status:</b> none of these agents exist yet. The repo already has some foundations they would build on: "
-        "DLQ routing, the is_suspect flag, the ONNX anomaly model, the Row Access Policy, the audit-log table and the "
-        "sql/08 validation queries. Only the DLQ routing, sample data and ONNX training are verified; everything else "
-        "has not run against live Snowflake. This is a plan, not a description of working software."))
+        "<b>Approach:</b> the agent roles below are <i>responsibilities</i>, not a fleet of custom agents to build. "
+        "Existing tools fill most of them (Snowflake alerts and Tasks, Dagster checks, dbt tests, Terraform, CI, and the "
+        "Snowflake Cortex Agent); this project writes the glue between those tools and the guardrails around them, "
+        "with the goal of removing repetitive human work while keeping human approval for anything that changes money, "
+        "access or production (docs/production-readiness.md). <b>Status:</b> only the DLQ routing, sample data and ONNX "
+        "training are verified; everything else is written but has not run against live Snowflake."))
 
     st.append(P("Who feels which problems", "h2"))
     st += bullets([
@@ -411,8 +413,9 @@ def build(out: Path, cat: Catalog) -> None:
 
     st.append(PageBreak())
     st.append(P("The agent roster", "h1"))
-    st.append(P(f"{len(cat.agents)} agents, each with one job. TRIAGE coordinates the others; ANALYST is the Cortex Agent "
-                "the repo already defines in sql/10_agent."))
+    st.append(P(f"{len(cat.agents)} roles, each with one job. Each is filled first by an existing tool (named in its "
+                "tools column) plus our checks; an AI assistant is added only where a human would otherwise do "
+                "repetitive diagnosis or drafting. ANALYST is the Cortex Agent the repo already defines in sql/10_agent."))
     st.append(grid(["Agent", "Owns", "Tools it is given"],
                    [(f"{a.code}<br/><font name='Body' size='7'>{escape(a.name)}</font>", escape(a.owns), escape(a.tools))
                     for a in cat.agents], [1.35, 2.25, 3.9]))
