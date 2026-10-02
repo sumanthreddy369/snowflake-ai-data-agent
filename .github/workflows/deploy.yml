@@ -1,0 +1,103 @@
+# Production deploy. Manual trigger only, never on push.
+#
+# The apply job runs in the GitHub "production" environment. Configure that
+# environment (Settings -> Environments) with required reviewers, so a human
+# reads the Terraform plan and approves before anything changes.
+#
+# Not yet run. Required secrets:
+#   SNOWFLAKE_ORGANIZATION_NAME, SNOWFLAKE_ACCOUNT_NAME  -- Terraform provider
+#   SNOWFLAKE_ACCOUNT        -- account identifier for the Python connector
+#   SNOWFLAKE_USER, SNOWFLAKE_PRIVATE_KEY (Terraform, key-pair)
+#   SNOWFLAKE_PASSWORD, SNOWFLAKE_ROLE, SNOWFLAKE_WAREHOUSE (Dagster deploy)
+#   GCP_CREDENTIALS_JSON, GCP_PROJECT, GCS_BUCKET, ONCALL_EMAIL
+name: deploy
+
+on:
+  workflow_dispatch:
+
+env:
+  TF_VAR_gcp_project_id: ${{ secrets.GCP_PROJECT }}
+  TF_VAR_gcs_bucket_name: ${{ secrets.GCS_BUCKET }}
+  TF_VAR_snowflake_organization_name: ${{ secrets.SNOWFLAKE_ORGANIZATION_NAME }}
+  TF_VAR_snowflake_account_name: ${{ secrets.SNOWFLAKE_ACCOUNT_NAME }}
+  TF_VAR_snowflake_user: ${{ secrets.SNOWFLAKE_USER }}
+  TF_VAR_snowflake_private_key_path: ${{ github.workspace }}/.sf_key.p8
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
+      - uses: hashicorp/setup-terraform@v3
+      - name: Write Snowflake key
+        run: echo "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}" > "$TF_VAR_snowflake_private_key_path"
+      - run: terraform init -input=false
+      - run: terraform plan -input=false -out=tfplan
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: infra/terraform/tfplan
+
+  apply-and-deploy:
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
+      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: infra/terraform
+      - name: Write Snowflake key
+        run: echo "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}" > "$TF_VAR_snowflake_private_key_path"
+      - name: Terraform apply (the plan a reviewer approved)
+        working-directory: infra/terraform
+        run: |
+          terraform init -input=false
+          terraform apply -input=false tfplan
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Deploy Snowflake objects, dbt and the agent in dependency order
+        env:
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+          SNOWFLAKE_ROLE: ${{ secrets.SNOWFLAKE_ROLE }}
+          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
+          GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
+          GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+          ONCALL_EMAIL: ${{ secrets.ONCALL_EMAIL }}
+          DBT_PROFILES_DIR: ${{ github.workspace }}/.ci_dbt_profiles
+        run: |
+          mkdir -p "$DBT_PROFILES_DIR"
+          cat > "$DBT_PROFILES_DIR/profiles.yml" <<EOF
+          retail_agent_gold:
+            target: prod
+            outputs:
+              prod:
+                type: snowflake
+                account: "$SNOWFLAKE_ACCOUNT"
+                user: "$SNOWFLAKE_USER"
+                password: "$SNOWFLAKE_PASSWORD"
+                role: TRANSFORMER
+                database: MARKET_AGENT
+                warehouse: COMPUTE_WH
+                schema: GOLD
+                threads: 4
+          EOF
+          (cd dbt && dbt parse --target prod)
+          DBT_TARGET=prod dagster job execute -m orchestration.definitions -j deploy_job

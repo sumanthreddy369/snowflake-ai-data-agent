@@ -36,8 +36,10 @@ snowflake-ai-data-agent/
 │   │   └── validation_queries.sql      # hand-written SQL twin of every semantic-model verified_query
 │   ├── 09_guardrails/
 │   │   └── cost_and_access_guardrails.sql  # ANALYST_WH, resource monitor, audit log table
-│   └── 10_agent/
-│       └── cortex_agent.sql            # CREATE AGENT: routes between analyst and search tools
+│   ├── 10_agent/
+│   │   └── cortex_agent.sql            # CREATE AGENT: routes between analyst and search tools
+│   └── 11_monitoring/
+│       └── alerts.sql                  # Snowflake ALERTs that page on-call even if the orchestrator is down
 ├── streaming/                          # ingestion producers/backfillers, Python
 │   ├── schemas.py                      # Pydantic: TradeRecord, BarRecord, SymbolRecord, NewsRecord
 │   ├── alpaca_stream_producer.py       # live: Alpaca websocket -> Kafka (+ DLQ on validation failure)
@@ -69,6 +71,12 @@ snowflake-ai-data-agent/
 ├── semantic_layer/
 │   ├── semantic_model.yaml             # Cortex Analyst YAML (custom window-function metrics)
 │   └── semantic_view.sql               # native CREATE SEMANTIC VIEW (what Cortex Agents/MCP query)
+├── orchestration/                      # Dagster: deploy order, dbt, schedules, guardrail checks (glue)
+│   ├── assets.py                       # one asset per SQL file / dbt model / backfill step
+│   ├── checks.py                       # policy attached, freshness, reconciliation, task health
+│   └── definitions.py                  # jobs and schedules
+├── infra/terraform/                    # GCS + Pub/Sub + IAM, Snowflake database/warehouse/roles/integrations
+├── .github/workflows/                  # ci.yml (every push), deploy.yml (manual, approval-gated)
 ├── knowledge/
 │   └── problem_catalog.yaml            # agent knowledge: every problem, owning agent, fix, guardrail, bad/good SQL; source of the PDF
 ├── requirements.txt                    # single flat file for the whole repo's Python deps
@@ -77,7 +85,11 @@ snowflake-ai-data-agent/
     ├── agent-and-governance-flow.md    # deep dive on the flow with the most entry points
     ├── restructure-proposal.md         # suggested layout changes -- proposals only, not applied
     ├── snowflake-e2e-agent-playbook.pdf  # 158 problems, the agent for each, how agents are trained (plan, not built)
-    └── build_playbook.py               # validates knowledge/problem_catalog.yaml and renders it to the PDF
+    ├── build_playbook.py               # validates knowledge/problem_catalog.yaml and renders it to the PDF
+    ├── glue-and-guardrails.md          # PLAN OF RECORD: 3 glue agents + guardrail gateway over existing tools
+    ├── production-readiness.md         # existing tools vs the glue and guardrails we write; human work removed
+    ├── runbook.md                      # on-call: severities, one entry per alert
+    └── modeling-agents-study.md        # stage-gated build with reports, around existing tools
 ```
 
 ---
@@ -350,16 +362,15 @@ pip install dbt-snowflake
 
 ## Building and running
 
-There is no build step — this is SQL run directly against Snowflake, plus plain Python scripts. Order matters; see the numbered prefixes under `sql/` and the walkthrough below.
+There is no build step — this is SQL run directly against Snowflake, plus plain Python scripts, wired together by Terraform and Dagster. See [docs/production-readiness.md](docs/production-readiness.md) for which existing tool does what and the glue and guardrails around them.
 
-The Gold tables are created by dbt, so the steps that read from or attach to them have to come after `dbt run`. The numeric prefixes under `sql/` alone don't show this.
-
-1. **Before dbt**, run these against your Snowflake account (Snowsight worksheet or SnowSQL), in order: `sql/01_ingest` → `02_bronze` → `03_silver` → `04_documents` → `07_governance` → `09_guardrails`. `07_governance` creates the `GOLD` and `STAGING` schemas and the Row Access Policy, and grants `TRANSFORMER` what dbt needs.
-2. `cd dbt && dbt run` (after copying `profiles.yml.example` to `~/.dbt/profiles.yml` and filling in your account). This builds the Gold tables and attaches `DELAYED_DATA_POLICY` to `FCT_TRADES` and `FCT_BARS` through a post-hook on each model, so every rebuild comes back governed.
-3. **After dbt**, run `semantic_layer/semantic_view.sql` → `sql/10_agent`. Both reference Gold tables that only exist once step 2 has run.
+1. **Infrastructure:** `cd infra/terraform && terraform apply` (copy `terraform.tfvars.example` to `terraform.tfvars` first). Creates the GCS bucket, Pub/Sub wiring and IAM, and the Snowflake database, agent warehouse, credit monitor, roles and integrations.
+2. **Deploy everything in dependency order (recommended):** `dagster job execute -m orchestration.definitions -j deploy_job`. Dagster derives the order from declared dependencies, so it can't drift. Needs the env vars listed in `orchestration/assets.py` and a dbt profile in `~/.dbt/profiles.yml`.
+3. **Or by hand**, in this order — the `sql/` numeric prefixes are *not* the run order: `02_bronze` → `03_silver` → `04_documents` → `01_ingest` (its pipes load tables created in 02 and 04) → `07_governance` (creates `GOLD`/`STAGING` and the policy) → `09_guardrails` → `cd dbt && dbt build` (builds Gold and attaches `DELAYED_DATA_POLICY` via post-hooks) → `semantic_layer/semantic_view.sql` → `10_agent` → `11_monitoring`.
 4. Generate or replay data — see the table below.
-5. Run `sql/08_validation` to check the agent's answers. Its last query confirms the policy is attached to both fact tables.
+5. Run `sql/08_validation` to check the agent's answers. Its last two checks confirm the policy is attached and the delay doesn't depend on session timezone.
 6. Run any of the five agent entry points — see [API / usage](#api--usage).
+7. **Operate:** `dagster dev -m orchestration.definitions` runs the schedules (Gold every 5 minutes in market hours, guardrail checks every 15 minutes, nightly backfill); Snowflake alerts page on-call independently. Procedures: [docs/runbook.md](docs/runbook.md).
 
 ---
 
@@ -454,7 +465,12 @@ get_flagged_anomalies(symbol="AAPL")  # symbol is optional
 | Append-only audit log | Stubbed — written, not applied |
 | ONNX anomaly-detection model (train + export) | **Complete** — run locally against sample data, produces a working `.onnx` file |
 | Model Registry registration | Target (not built yet) — function raises `NotImplementedError` by design |
-| Automated test suite (pytest) / CI | Target (not built yet) |
+| Orchestration (Dagster) | Stubbed — asset graph and schedules validate locally (`dagster definitions validate`); not run against Snowflake |
+| Infrastructure as code (Terraform) | Stubbed — `terraform validate` passes against the real providers; not applied |
+| CI (GitHub Actions) | Written — same checks pass locally; first run happens on the next push |
+| CD (approval-gated deploy) | Stubbed — written, not run (needs secrets and a `production` environment) |
+| Monitoring alerts + runbook | Stubbed — written, not created in Snowflake |
+| Automated test suite (pytest) | Target (not built yet) |
 
 ---
 

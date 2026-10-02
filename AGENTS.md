@@ -25,9 +25,16 @@ transformation, `semantic_layer/` defines what the agent can answer,
 ## Build, test, lint
 
 - Install deps: `pip install -r requirements.txt`
-- dbt: `cd dbt && dbt run` / `dbt test`
-- No automated Python test suite exists yet — verification during
-  development has been `python -m py_compile <file>` plus running scripts
+- dbt: `cd dbt && dbt build` (needs a profile in `~/.dbt/` or `DBT_PROFILES_DIR`)
+- Orchestration: `dagster definitions validate -m orchestration.definitions`
+  (after `dbt parse`); `dagster dev -m orchestration.definitions` for the UI
+- Terraform: `cd infra/terraform && terraform fmt -check && terraform init -backend=false && terraform validate`
+- CI: `.github/workflows/ci.yml` runs all of the above plus the sample-data
+  generators and the catalog/playbook build on every push. Keep it passing;
+  it needs no secrets.
+- No automated behavioural test suite (pytest) exists yet — CI checks that
+  things compile, parse and load, not that they behave. Verification has been
+  `python -m py_compile <file>` plus running scripts
   directly against `streaming/data/sample_*.csv`. If you add tests, they are
   the first ones in the repo; there's no existing suite to match, only the
   conventions below.
@@ -101,6 +108,11 @@ transformation, `semantic_layer/` defines what the agent can answer,
 - Don't claim something works because the SQL "looks right" — until this
   repo has been run against live Snowflake, treat every SQL file as
   unverified and say so.
-- Don't add a testing framework, linter, or CI config speculatively; these
-  are known gaps (see README's Feature status), not silent assumptions to
-  fill in.
+- Don't add a testing framework or linter speculatively; these are known
+  gaps (see README's Feature status), not silent assumptions to fill in. (CI
+  was added on request; extend it rather than adding a second pipeline.)
+- Don't rebuild what an existing tool already does. This repo's own code is
+  glue between tools and guardrails around them — see
+  `docs/production-readiness.md` before adding a new component.
+- Don't use the `sql/` numeric prefixes as the run order; the dependency
+  order lives in `orchestration/assets.py` (and README "Building and running").

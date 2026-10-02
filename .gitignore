@@ -21,3 +21,16 @@ streaming/data/*
 
 # Streamlit's local run cache
 .streamlit/
+
+# Terraform: providers and state stay local; the lock file is committed.
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+tfplan
+crash.log
+
+# CI/deploy scratch and Dagster's temporary instance directories
+.ci_dbt_profiles/
+.sf_key.p8
+.tmp_dagster_home_*/

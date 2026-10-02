@@ -1,0 +1,59 @@
+# Runs on every push and pull request. Needs no accounts or secrets: it checks
+# that everything compiles, parses, validates and generates -- the same checks
+# run by hand during development, now automatic. Behavioural tests (pytest)
+# are still to come; see README "Feature status".
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python-dbt-dagster:
+    runs-on: ubuntu-latest
+    env:
+      DBT_PROFILES_DIR: ${{ github.workspace }}/.ci_dbt_profiles
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          sudo apt-get install -y fonts-dejavu-core
+
+      - name: Compile all Python
+        run: python -m compileall -q agent api docs orchestration snowpark streaming ui
+
+      - name: Sample data generators run and validate
+        run: |
+          python streaming/generate_sample_data.py --out-dir "$RUNNER_TEMP/sample"
+          python streaming/generate_sample_news.py --out-dir "$RUNNER_TEMP/sample"
+
+      - name: Problem catalog validates and playbook builds
+        run: python docs/build_playbook.py --out "$RUNNER_TEMP/playbook.pdf"
+
+      - name: dbt parse (placeholder profile, no connection)
+        run: |
+          mkdir -p "$DBT_PROFILES_DIR"
+          sed 's/<[^>]*>/ci_placeholder/g' dbt/profiles.yml.example > "$DBT_PROFILES_DIR/profiles.yml"
+          cd dbt && dbt parse
+
+      - name: Dagster asset graph loads
+        run: dagster definitions validate -m orchestration.definitions
+
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate

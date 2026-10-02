@@ -26,3 +26,10 @@ onnx
 # docs/ (build_playbook.py validates knowledge/problem_catalog.yaml and renders the PDF)
 reportlab
 pyyaml
+
+# orchestration/ (Dagster asset graph over the SQL files, dbt and backfills)
+dagster
+dagster-dbt
+dagster-snowflake
+dbt-snowflake
+google-cloud-storage
