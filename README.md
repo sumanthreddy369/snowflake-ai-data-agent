@@ -38,8 +38,10 @@ snowflake-ai-data-agent/
 │   │   └── cost_and_access_guardrails.sql  # ANALYST_WH, resource monitor, audit log table
 │   ├── 10_agent/
 │   │   └── cortex_agent.sql            # CREATE AGENT: routes between analyst and search tools
-│   └── 11_monitoring/
-│       └── alerts.sql                  # Snowflake ALERTs that page on-call even if the orchestrator is down
+│   ├── 11_monitoring/
+│   │   └── alerts.sql                  # Snowflake ALERTs that page on-call even if the orchestrator is down
+│   └── 99_teardown/
+│       └── stop_spend.sql              # spend cap, pause-everything, and (commented) full removal
 ├── streaming/                          # ingestion producers/backfillers, Python
 │   ├── schemas.py                      # Pydantic: TradeRecord, BarRecord, SymbolRecord, NewsRecord
 │   ├── alpaca_stream_producer.py       # live: Alpaca websocket -> Kafka (+ DLQ on validation failure)
