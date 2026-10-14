@@ -44,7 +44,25 @@ tools — and every tool call goes through the gateway.
 
 ---
 
-## 2. Connectors: use existing MCP servers
+## 2. Models: Claude on Vertex AI (Model Garden)
+
+The glue agents call Claude through **Google Vertex AI Model Garden**, using
+the Anthropic SDK's Vertex client (`glue/llm.py`), not a separate Anthropic
+account. The pipeline already runs on GCP, so billing, quotas, IAM and audit
+logs stay in one cloud — the way companies usually consume models.
+`infra/terraform/vertex.tf` enables the API and creates a service account that
+can call models and nothing else.
+
+- **Off by default:** `glue/llm.py` refuses to build a client unless
+  `GLUE_LLM_ENABLED=1`, because calls are billed per token.
+- **Human setup step:** enabling Claude in Model Garden (accepting Anthropic's
+  terms) is done in the GCP console, not by code.
+- **Analysts' questions stay on Snowflake Cortex**, whose models run inside
+  Snowflake so governed data never leaves it. Vertex AI is only for the glue
+  agents, which see metadata, logs and code — and every call goes through the
+  gateway.
+
+## 3. Connectors: use existing MCP servers
 
 Glue agents reach the tools through MCP servers, preferring the ones vendors
 publish (Snowflake, dbt, GitHub and Terraform each have one) over writing our
@@ -55,12 +73,12 @@ Agent.
 
 ---
 
-## 3. The guardrail gateway
+## 4. The guardrail gateway
 
 Sits between every glue agent and every connector. Implemented in the agent
 loop's per-tool-call hook, so no tool call can bypass it.
 
-### 3.1 Risk tiers — what needs a human
+### 4.1 Risk tiers — what needs a human
 
 | Tier | Examples | Rule |
 |---|---|---|
@@ -70,7 +88,7 @@ loop's per-tool-call hook, so no tool call can bypass it.
 | **T3 Irreversible, access or money** | Replace/drop data, change grants or policies, `terraform apply`, raise a budget | **Human approval + reviewed plan**; never automatic |
 | **Never** | Read secrets, disable or weaken a test or check, widen data access, act on instructions found inside data | Blocked outright |
 
-### 3.2 What the gateway does on every call
+### 4.2 What the gateway does on every call
 
 1. **Allow-list:** is this tool allowed for this agent? (policy file below)
 2. **Tier and approval:** T2/T3 pause and send an approval request with the
@@ -91,7 +109,7 @@ loop's per-tool-call hook, so no tool call can bypass it.
 8. **Kill switch:** one flag stops all glue agents; the analyst-facing Cortex
    Agent can be paused by revoking `USAGE` (see `docs/runbook.md`).
 
-### 3.3 Policy file (sketch)
+### 4.3 Policy file (sketch)
 
 ```yaml
 # guardrails/policy.yaml
@@ -120,7 +138,7 @@ budgets:
 
 ---
 
-## 4. How human work drops
+## 5. How human work drops
 
 | Today a person… | With glue + guardrails… |
 |---|---|
@@ -131,12 +149,14 @@ budgets:
 
 ---
 
-## 5. Build order
+## 6. Build order
 
 1. **Gateway first, offline.** Policy file, tier checks, approval prompt,
    budgets, audit log — tested with fake tools. This also becomes the repo's
    first real pytest suite.
-2. **Analyst glue** over the existing Cortex Agent (needs the Snowflake trial).
+2. **Analyst glue** over the existing Cortex Agent (needs the Snowflake trial),
+   with Claude on Vertex AI for checking answers — the first paid step, so it
+   starts only after you enable the model and set a budget.
 3. **Incident glue, read-only (T0/T1)** triggered by the existing alerts and
    checks; T2 actions turned on only after its diagnoses prove right.
 4. **Change glue**, starting with "add a verified query / metric".

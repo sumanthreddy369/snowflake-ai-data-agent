@@ -61,7 +61,9 @@ can't be undone, it needs both.
 | Semantic layer | Snowflake Semantic Views, Cortex Analyst | `semantic_layer/` | Verified queries + hand-written SQL twins |
 | Document search | Cortex Search | `sql/04_documents` | Agent cites sources or makes no news claim |
 | AI agent | **Snowflake Cortex Agent** (not a custom agent) | `sql/10_agent`, MCP server, Streamlit, FastAPI | Row access policy, read-only agent role, audit log, statement timeout |
-| Monitoring | Snowflake ALERTs + Dagster asset checks | `sql/11_monitoring`, `orchestration/checks.py` | Paging on stalls, policy loss, task failures, staleness |
+| Monitoring (inside Snowflake) | Snowflake ALERTs + Dagster asset checks | `sql/11_monitoring`, `orchestration/checks.py` | Paging on stalls, policy loss, task failures, staleness |
+| Monitoring (outside Snowflake) | **OpenTelemetry, Prometheus, Grafana, Jaeger** | `streaming/telemetry.py`, `api/main.py`, `infra/local/` | Alerts on producer stalls, DLQ rate, Kafka lag, event lag |
+| Models for the glue agents | **Claude on Vertex AI (Model Garden)** | `glue/llm.py`, `infra/terraform/vertex.tf` | Off by default; calls only through the guardrail gateway |
 | On-call | Email / webhook (PagerDuty, Slack) | Notification integration | `docs/runbook.md` |
 | Data observability | Built in for now (see §6) | — | dbt tests, reconciliation, freshness |
 | Data catalog | dbt docs + Dagster lineage for now (see §6) | — | Column descriptions in `schema.yml` |
@@ -153,6 +155,31 @@ Two layers on purpose:
 On-call procedure, severities and the "pause the agent" step:
 `docs/runbook.md`. Credit spend is capped by `ANALYST_AGENT_MONITOR`.
 
+### 5.1 Outside Snowflake: OpenTelemetry, Prometheus, Grafana
+
+Snowflake alerts can't see the producer, Kafka or the API. Those are covered
+by a free local stack (`infra/local/docker-compose.yml`):
+
+- **OpenTelemetry** in the code (`streaming/telemetry.py`, `api/main.py`):
+  messages sent per topic, DLQ count, event-to-Kafka lag, time of last
+  message; request rate, latency and status for the API; a trace per request.
+  Off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set, so CI and offline runs are
+  unaffected.
+- **OTel Collector** receives everything and is the one place to change
+  backends: today Prometheus and Jaeger; a company's Datadog, Splunk or
+  Dynatrace by editing `infra/local/otel-collector.yaml`, with no code change.
+- **Prometheus** scrapes the collector and `kafka-exporter`, and evaluates
+  four alert rules (`infra/local/prometheus-alerts.yml`): producer stalled,
+  DLQ above 1%, consumer lag above 10k, p95 event lag above 30 s.
+- **Grafana** (`localhost:3001`) shows one dashboard of the live path; Jaeger
+  (`localhost:16687`) shows traces.
+
+Verified locally: replaying sample data with one malformed row produced 100
+bar and 300 trade messages and 1 DLQ message in Prometheus, matching Kafka's
+own topic offsets exactly; the stall alert went to pending once the replay
+stopped during market hours; API metrics and status codes arrived from a
+running FastAPI instance.
+
 ---
 
 ## 6. Observability and catalog: when to buy
@@ -168,6 +195,23 @@ catalog (for example Atlan or Alation) when many teams need to find, trust and
 request data. Both integrate with what's already here: they read Snowflake's
 `ACCESS_HISTORY` and `QUERY_HISTORY`, dbt's manifest, and Dagster's metadata,
 so nothing here would be thrown away.
+
+---
+
+## 6.1 Tools considered and not adopted (yet)
+
+Adding every well-known tool would duplicate jobs and add cost. Each was
+checked against what's already here:
+
+| Tool | Decision | Reason |
+|---|---|---|
+| Jenkins | Not adopted | GitHub Actions already runs CI/CD and passes |
+| Spinnaker | Not adopted | No long-running services on Kubernetes to roll out; deploys are SQL, dbt and Terraform |
+| BlazeMeter | Later | Useful for load-testing the API once live (catalog I7); free k6 or Locust are alternatives; load tests spend Snowflake credits |
+| Datadog, Dynatrace | Not adopted | Paid; same job as OpenTelemetry + Prometheus + Grafana; reachable later through the OTel Collector |
+| Splunk | Not adopted | Paid beyond a small free tier; audit logs already live in Snowflake and can be forwarded via OTel later |
+| Amazon Bedrock | Not adopted | Vertex AI chosen instead: the project already runs on GCP; one model platform is enough |
+| NVIDIA NIM | Not adopted | Needs GPU setup; Ollama (already installed) is simpler if a local model is ever needed |
 
 ---
 

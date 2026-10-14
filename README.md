@@ -14,6 +14,8 @@ and locally verified where that's possible without an account (see
 [Feature status](#feature-status)), but none of it has been run against a
 live Snowflake account, Kafka broker, GCS bucket, or Alpaca connection yet.
 
+**Results so far, with screenshots:** [docs/stack-results.md](docs/stack-results.md) — the local Kafka + observability stack run end to end, including a real validation bug it caught and the fix.
+
 ---
 
 ## Repository structure
@@ -46,6 +48,7 @@ snowflake-ai-data-agent/
 │   ├── schemas.py                      # Pydantic: TradeRecord, BarRecord, SymbolRecord, NewsRecord
 │   ├── alpaca_stream_producer.py       # live: Alpaca websocket -> Kafka (+ DLQ on validation failure)
 │   ├── replay_sample_data.py           # offline: replays sample CSVs onto the same Kafka topics
+│   ├── telemetry.py                    # optional OpenTelemetry metrics (on when OTEL_EXPORTER_OTLP_ENDPOINT is set)
 │   ├── generate_sample_data.py         # generates data/sample_{bars,trades,symbols}.csv
 │   ├── generate_sample_news.py         # generates data/sample_news.csv
 │   ├── backfill_historical.py          # batch: Alpaca REST bars/assets -> CSV (async, per symbol)
@@ -77,7 +80,9 @@ snowflake-ai-data-agent/
 │   ├── assets.py                       # one asset per SQL file / dbt model / backfill step
 │   ├── checks.py                       # policy attached, freshness, reconciliation, task health
 │   └── definitions.py                  # jobs and schedules
-├── infra/terraform/                    # GCS + Pub/Sub + IAM, Snowflake database/warehouse/roles/integrations
+├── infra/terraform/                    # GCS + Pub/Sub + IAM, Snowflake database/warehouse/roles/integrations, Vertex AI
+├── infra/local/                        # docker compose: Kafka + OTel Collector, Prometheus (alerts), Grafana, Jaeger
+├── glue/llm.py                         # Claude on Vertex AI Model Garden for the glue agents (off by default)
 ├── .github/workflows/                  # ci.yml (every push), deploy.yml (manual, approval-gated)
 ├── knowledge/
 │   └── problem_catalog.yaml            # agent knowledge: every problem, owning agent, fix, guardrail, bad/good SQL; source of the PDF
@@ -88,6 +93,9 @@ snowflake-ai-data-agent/
     ├── restructure-proposal.md         # suggested layout changes -- proposals only, not applied
     ├── snowflake-e2e-agent-playbook.pdf  # 158 problems, the agent for each, how agents are trained (plan, not built)
     ├── build_playbook.py               # validates knowledge/problem_catalog.yaml and renders it to the PDF
+    ├── stack-results.md                # what has actually run, with screenshots (docs/screenshots/)
+    ├── workflow-and-tech-stack.pdf/.docx  # end-to-end workflow + full tech stack with versions
+    ├── build_workflow_doc.py           # renders both from one source
     ├── glue-and-guardrails.md          # PLAN OF RECORD: 3 glue agents + guardrail gateway over existing tools
     ├── production-readiness.md         # existing tools vs the glue and guardrails we write; human work removed
     ├── runbook.md                      # on-call: severities, one entry per alert
@@ -394,6 +402,9 @@ There is no build step — this is SQL run directly against Snowflake, plus plai
 | `cd ui && streamlit run streamlit_app.py` | Start the chat UI (must run with `ui/` as CWD — see note below) |
 | `cd api && uvicorn main:app --reload` | Start the FastAPI service (must run with `api/` as CWD — see note below) |
 | `python snowpark/train_anomaly_model.py` | Train + export the ONNX anomaly model locally |
+| `cd infra/local && docker compose up -d` | Start local Kafka + observability (Grafana localhost:3001, Prometheus localhost:9091, Jaeger localhost:16687) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:14318 python streaming/replay_sample_data.py` | Replay sample data with metrics flowing to Prometheus/Grafana |
+| `python -m glue.llm --check` | Check the Vertex AI client wiring without sending a request (no cost) |
 | `python docs/build_playbook.py` | Validate `knowledge/problem_catalog.yaml` and regenerate `docs/snowflake-e2e-agent-playbook.pdf` from it |
 
 **Note on `ui/` and `api/`**: both scripts do `sys.path.insert(0, "../agent")`
@@ -471,7 +482,9 @@ get_flagged_anomalies(symbol="AAPL")  # symbol is optional
 | Infrastructure as code (Terraform) | Stubbed — `terraform validate` passes against the real providers; not applied |
 | CI (GitHub Actions) | Written — same checks pass locally; first run happens on the next push |
 | CD (approval-gated deploy) | Stubbed — written, not run (needs secrets and a `production` environment) |
-| Monitoring alerts + runbook | Stubbed — written, not created in Snowflake |
+| Monitoring alerts + runbook (Snowflake side) | Stubbed — written, not created in Snowflake |
+| Observability outside Snowflake (OpenTelemetry, Prometheus, Grafana, Jaeger) | **Complete locally** — replayed data reached Prometheus and matched Kafka's own offsets; 4 alert rules load; dashboard renders |
+| Vertex AI (Model Garden) for glue agents | Partial — client and Terraform validate; no model call made (needs enabling in Model Garden + a budget) |
 | Automated test suite (pytest) | Target (not built yet) |
 
 ---
