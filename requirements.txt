@@ -23,9 +23,20 @@ skl2onnx
 onnx
 # snowflake-ml-python
 
-# docs/ (build_playbook.py validates knowledge/problem_catalog.yaml and renders the PDF)
+# docs/ (build_playbook.py validates knowledge/problem_catalog.yaml and renders the PDF;
+# build_workflow_doc.py also writes the Word version)
 reportlab
 pyyaml
+python-docx
+pypdfium2
+
+# Observability (optional at runtime: only active when OTEL_EXPORTER_OTLP_ENDPOINT is set)
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation-fastapi
+
+# glue/ (Claude on Vertex AI Model Garden for the glue agents; off by default)
+anthropic[vertex]
 
 # orchestration/ (Dagster asset graph over the SQL files, dbt and backfills)
 dagster
