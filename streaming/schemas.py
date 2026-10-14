@@ -10,10 +10,17 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+# A ticker must be present and look like one (AAPL, BRK.B). Without this, an
+# empty symbol is still a valid `str` and a nameless bar reaches Kafka, Bronze
+# and Silver -- Silver's `symbol IS NOT NULL` filter doesn't catch '' either.
+# Found by replaying sample data with a deliberately symbol-less row
+# (docs/stack-results.md).
+Ticker = Field(min_length=1, max_length=15, pattern=r"^[A-Z][A-Z0-9.\-]*$")
+
 
 class TradeRecord(BaseModel):
-    trade_id: str
-    symbol: str
+    trade_id: str = Field(min_length=1)
+    symbol: str = Ticker
     price: float = Field(gt=0)
     size: int = Field(gt=0)
     exchange_code: str | None = None
@@ -29,7 +36,7 @@ class TradeRecord(BaseModel):
 
 
 class BarRecord(BaseModel):
-    symbol: str
+    symbol: str = Ticker
     bar_ts: datetime
     open: float = Field(gt=0)
     high: float = Field(gt=0)
@@ -62,7 +69,7 @@ class BarRecord(BaseModel):
 
 
 class SymbolRecord(BaseModel):
-    symbol: str
+    symbol: str = Ticker
     company_name: str
     sector: str
     exchange: str
