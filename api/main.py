@@ -11,8 +11,10 @@ pass-through to cortex_agent_client.py, so the same Row Access Policy and
 15-minute-delay rule apply regardless of how the question arrives.
 
 Run: uvicorn main:app --reload
+Set OTEL_EXPORTER_OTLP_ENDPOINT to export request metrics and traces (OpenTelemetry).
 """
 
+import os
 import sys
 
 from fastapi import FastAPI, HTTPException
@@ -26,6 +28,28 @@ app = FastAPI(
     title="Market Data AI Agent API",
     description="HTTP layer over the Cortex Agent / Cortex Analyst clients. See agent/README.md for governance notes.",
 )
+
+if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+    # Request count, latency and error metrics plus a trace per request, sent
+    # to the OTel Collector (infra/local). Off by default so nothing changes
+    # when the observability stack isn't running.
+    from opentelemetry import metrics, trace
+    from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+    _resource = Resource.create({"service.name": "market-agent-api", "service.namespace": "market-agent"})
+    metrics.set_meter_provider(MeterProvider(
+        resource=_resource, metric_readers=[PeriodicExportingMetricReader(OTLPMetricExporter())]))
+    _tracer_provider = TracerProvider(resource=_resource)
+    _tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+    trace.set_tracer_provider(_tracer_provider)
+    FastAPIInstrumentor.instrument_app(app)
 
 
 class QuestionRequest(BaseModel):

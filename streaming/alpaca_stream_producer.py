@@ -8,7 +8,8 @@ Docs: https://docs.alpaca.markets/us/docs/websocket-streaming
 Requires a free Alpaca account (paper trading is enough) for an API key/secret:
 https://alpaca.markets/
 
-Env vars: ALPACA_API_KEY, ALPACA_API_SECRET
+Env vars: ALPACA_API_KEY, ALPACA_API_SECRET; optional OTEL_EXPORTER_OTLP_ENDPOINT
+to emit metrics (see telemetry.py).
 """
 
 import argparse
@@ -29,6 +30,7 @@ from websockets.sync.client import connect
 from websockets.exceptions import ConnectionClosed
 
 from schemas import BarRecord, TradeRecord
+from telemetry import Telemetry
 
 logging.basicConfig(
     level=logging.INFO,
@@ -73,7 +75,7 @@ def to_bar_record(msg: dict) -> BarRecord:
     stop=stop_after_attempt(10),
     before_sleep=before_sleep_log(logger, logging.WARNING),
 )
-def run(args, producer: KafkaProducer):
+def run(args, producer: KafkaProducer, telemetry: Telemetry):
     api_key = os.environ["ALPACA_API_KEY"]
     api_secret = os.environ["ALPACA_API_SECRET"]
 
@@ -96,6 +98,7 @@ def run(args, producer: KafkaProducer):
                             value=record.model_dump(mode="json"),
                             key=record.symbol.encode("utf-8"),
                         )
+                        telemetry.sent(args.trades_topic, record.trade_ts)
                         logger.info("trade %s", record.model_dump_json())
                     elif msg_type == "b":
                         record = to_bar_record(msg)
@@ -104,6 +107,7 @@ def run(args, producer: KafkaProducer):
                             value=record.model_dump(mode="json"),
                             key=record.symbol.encode("utf-8"),
                         )
+                        telemetry.sent(args.bars_topic, record.bar_ts)
                         logger.info("bar %s", record.model_dump_json())
                     # other T values (success/error/subscription) are control messages
                 except ValidationError as e:
@@ -116,6 +120,7 @@ def run(args, producer: KafkaProducer):
                         value={"raw_message": msg, "error": str(e)},
                         key=msg.get("S", "unknown").encode("utf-8"),
                     )
+                    telemetry.dlq("live")
 
 
 def main():
@@ -132,7 +137,7 @@ def main():
         bootstrap_servers=args.bootstrap_servers,
         value_serializer=lambda v: json.dumps(v).encode("utf-8"),
     )
-    run(args, producer)
+    run(args, producer, Telemetry("alpaca-stream-producer"))
 
 
 if __name__ == "__main__":

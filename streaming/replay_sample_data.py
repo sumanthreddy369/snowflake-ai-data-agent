@@ -5,6 +5,7 @@ timestamp. Use this to test the Snowflake Kafka Connector end-to-end without
 an Alpaca account or while markets are closed. Each row is re-validated
 against schemas.py before being sent, matching the live producer's behavior --
 including routing anything that fails validation to the same DLQ topic.
+Set OTEL_EXPORTER_OTLP_ENDPOINT to emit metrics (see telemetry.py).
 """
 
 import argparse
@@ -12,17 +13,22 @@ import csv
 import json
 import logging
 import time
+from pathlib import Path
 
 from kafka import KafkaProducer
 from pydantic import ValidationError
 
 from schemas import BarRecord, TradeRecord
+from telemetry import Telemetry
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("replay_sample_data")
 
+# Resolved from this file's location, not the caller's working directory.
+DATA_DIR = Path(__file__).resolve().parent / "data"
 
-def load_validated(path, model_cls, producer: KafkaProducer, dlq_topic: str):
+
+def load_validated(path, model_cls, producer: KafkaProducer, dlq_topic: str, telemetry: Telemetry | None = None):
     records = []
     with open(path, newline="") as f:
         for row in csv.DictReader(f):
@@ -35,13 +41,15 @@ def load_validated(path, model_cls, producer: KafkaProducer, dlq_topic: str):
                     value={"raw_message": row, "error": str(e), "source_file": path},
                     key=row.get("symbol", "unknown").encode("utf-8"),
                 )
+                if telemetry:
+                    telemetry.dlq("replay")
     return records
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bars-csv", default="data/sample_bars.csv")
-    parser.add_argument("--trades-csv", default="data/sample_trades.csv")
+    parser.add_argument("--bars-csv", default=str(DATA_DIR / "sample_bars.csv"))
+    parser.add_argument("--trades-csv", default=str(DATA_DIR / "sample_trades.csv"))
     parser.add_argument("--bootstrap-servers", default="localhost:9092")
     parser.add_argument("--trades-topic", default="market-trades")
     parser.add_argument("--bars-topic", default="market-bars")
@@ -55,8 +63,9 @@ def main():
         value_serializer=lambda v: json.dumps(v).encode("utf-8"),
     )
 
-    bars = load_validated(args.bars_csv, BarRecord, producer, args.dlq_topic)
-    trades = load_validated(args.trades_csv, TradeRecord, producer, args.dlq_topic)
+    telemetry = Telemetry("replay-sample-data")
+    bars = load_validated(args.bars_csv, BarRecord, producer, args.dlq_topic, telemetry)
+    trades = load_validated(args.trades_csv, TradeRecord, producer, args.dlq_topic, telemetry)
     if args.limit:
         bars, trades = bars[: args.limit], trades[: args.limit]
 
@@ -73,6 +82,8 @@ def main():
 
         topic = args.bars_topic if kind == "bar" else args.trades_topic
         producer.send(topic, value=record.model_dump(mode="json"), key=record.symbol.encode("utf-8"))
+        # No event lag here: replayed timestamps are historical by design.
+        telemetry.sent(topic)
         logger.info("%s %s", kind, record.model_dump_json())
 
     producer.flush()

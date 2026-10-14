@@ -1,0 +1,53 @@
+# Alerts for the parts of the pipeline Snowflake can't see (Snowflake-side
+# alerts live in sql/11_monitoring). Each maps to a runbook entry and a
+# problem ID in knowledge/problem_catalog.yaml.
+#
+# "Market hours" here is 15:00-20:00 UTC on weekdays: inside the regular
+# session in both EDT and EST, so no DST handling is needed. Exchange
+# holidays aren't modelled (catalog A2).
+
+groups:
+  - name: market-agent-ingestion
+    rules:
+      - alert: ProducerStalled
+        # A1 silent stall: connected but no messages for 2 minutes in market hours.
+        expr: |
+          (time() - max(market_last_message_unixtime) > 120)
+          and on() (hour() >= 15 and hour() < 20)
+          and on() (day_of_week() >= 1 and day_of_week() <= 5)
+        for: 1m
+        labels: {severity: sev1}
+        annotations:
+          summary: "No market messages for over 2 minutes during market hours"
+          runbook: "docs/runbook.md#silver-ingestion-stalled"
+
+      - alert: DlqRateHigh
+        # A8/B2: more than 1% of messages failing validation.
+        expr: |
+          sum(rate(market_dlq_messages_total[5m]))
+            / clamp_min(sum(rate(market_messages_sent_total[5m])), 0.001) > 0.01
+        for: 5m
+        labels: {severity: sev2}
+        annotations:
+          summary: "Over 1% of messages are going to the DLQ"
+          runbook: "docs/runbook.md#pipeline-task-failed"
+
+      - alert: KafkaConsumerLagHigh
+        # B1: the Snowflake connector falling behind.
+        expr: sum by (consumergroup, topic) (kafka_consumergroup_lag) > 10000
+        for: 5m
+        labels: {severity: sev2}
+        annotations:
+          summary: "Kafka consumer {{ $labels.consumergroup }} is over 10k messages behind on {{ $labels.topic }}"
+          runbook: "docs/runbook.md#silver-ingestion-stalled"
+
+      - alert: EventLagHigh
+        # K1/K2: events reaching Kafka more than 30 s after they happened
+        # (also catches producer clock skew).
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(market_event_lag_seconds_bucket[5m]))) > 30
+        for: 5m
+        labels: {severity: sev2}
+        annotations:
+          summary: "p95 event-to-Kafka lag is over 30 seconds"
+          runbook: "docs/runbook.md#silver-ingestion-stalled"

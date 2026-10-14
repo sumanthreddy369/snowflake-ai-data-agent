@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: market-agent
+    folder: market-agent
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards
