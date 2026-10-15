@@ -29,6 +29,7 @@ reportlab
 pyyaml
 python-docx
 pypdfium2
+matplotlib   # analysis/eda_charts.py
 
 # Observability (optional at runtime: only active when OTEL_EXPORTER_OTLP_ENDPOINT is set)
 opentelemetry-sdk

@@ -12,9 +12,11 @@ has either a hand-written SQL check or a source citation behind it.
 **Status: in development.** All SQL, dbt, and Python in this repo is written
 and locally verified where that's possible without an account (see
 [Feature status](#feature-status)), but none of it has been run against a
-live Snowflake account, Kafka broker, GCS bucket, or Alpaca connection yet.
+live Kafka broker connected to Snowflake, GCS bucket, or Alpaca connection yet; the Snowflake layers have now run on a trial account (see below).
 
-**Results so far, with screenshots:** [docs/stack-results.md](docs/stack-results.md) — the local Kafka + observability stack run end to end, including a real validation bug it caught and the fix.
+**Results so far, with screenshots:**
+- [docs/snowflake-results.md](docs/snowflake-results.md) — the pipeline run on Snowflake: Bronze → Silver → Gold, EDA in Snowsight, the 15-minute delay policy tested, and six bugs the live run found and fixed.
+- [docs/stack-results.md](docs/stack-results.md) — the local Kafka + observability stack run end to end, including a validation bug it caught.
 
 ---
 
@@ -460,22 +462,22 @@ get_flagged_anomalies(symbol="AAPL")  # symbol is optional
 | Offline sample news generation | **Complete** — run locally, produces schema-valid output |
 | DLQ routing on invalid messages | **Complete** — verified locally with deliberately malformed rows |
 | Batch backfill (bars, symbols, news) | Stubbed — code complete, not run against live Alpaca/GCS |
-| Bronze → Silver (Streams + Tasks) | Stubbed — written, not run against live Snowflake |
+| Bronze → Silver (Streams + Tasks) | **Complete** — run on Snowflake (15 Oct 2026); all four MERGE tasks succeeded, Silver = Bronze exactly. See [docs/snowflake-results.md](docs/snowflake-results.md) |
 | Dynamic Table alternative for Silver | Stubbed — written, not wired into the active pipeline or run |
-| Silver → Gold (dbt) | Stubbed — written, not run |
-| Circuit-breaker flag (`is_suspect`) | Stubbed — written, not run |
-| Cortex Search (news RAG) | Stubbed — DDL written, not created against a live account |
-| Native Semantic View | Stubbed — DDL written, not created |
+| Silver → Gold (dbt) | **Complete** — `dbt build` on Snowflake, 19/19 models and tests pass (after fixing `dim_date`) |
+| Circuit-breaker flag (`is_suspect`) | **Complete** — computed in Gold on Snowflake; 0 bars flagged in the sample day |
+| Cortex Search (news RAG) | Blocked — Snowflake trial accounts can't use embedding functions (`EMBED_TEXT_*` not available for trial accounts) |
+| Native Semantic View | **Complete** — created on Snowflake; `SEMANTIC_VIEW()` queries return correct metrics |
 | YAML semantic model (Cortex Analyst) | Stubbed — written, not uploaded |
-| Cortex Agent (multi-tool routing) | Stubbed — DDL written, not created |
+| Cortex Agent (multi-tool routing) | Partial — agent object created on Snowflake; its Cortex tools can't run on a trial account |
 | Direct Cortex Analyst client | Stubbed — code complete, imports cleanly, not run against a live endpoint |
 | Cortex Agent client | Stubbed — same |
 | MCP server (3 tools) | Stubbed — imports cleanly; tool functions don't yet include a standalone news-search tool despite the module docstring mentioning one — see `docs/restructure-proposal.md` |
 | Streamlit chat UI | Stubbed — compiles, not run |
 | FastAPI service | Stubbed — compiles, not run |
-| RBAC + Row Access Policy | Stubbed — written, not applied |
-| Resource Monitor + statement timeout | Stubbed — written, not applied |
-| Append-only audit log | Stubbed — written, not applied |
+| RBAC + Row Access Policy | **Complete** — applied and tested on Snowflake across roles, secondary roles and session timezones; a secondary-role leak was found and fixed |
+| Resource Monitor + statement timeout | **Complete** — applied: account cap `TRIAL_SPEND_CAP` (110 credits) and `ANALYST_AGENT_MONITOR` |
+| Append-only audit log | Partial — table and grants created on Snowflake; not yet written to by an agent call |
 | ONNX anomaly-detection model (train + export) | **Complete** — run locally against sample data, produces a working `.onnx` file |
 | Model Registry registration | Target (not built yet) — function raises `NotImplementedError` by design |
 | Orchestration (Dagster) | Stubbed — asset graph and schedules validate locally (`dagster definitions validate`); not run against Snowflake |
