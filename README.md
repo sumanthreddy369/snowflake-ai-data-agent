@@ -86,7 +86,13 @@ snowflake-ai-data-agent/
 │   └── definitions.py                  # jobs and schedules
 ├── infra/terraform/                    # GCS + Pub/Sub + IAM, Snowflake database/warehouse/roles/integrations, Vertex AI
 ├── infra/local/                        # docker compose: Kafka + OTel Collector, Prometheus (alerts), Grafana, Jaeger
-├── glue/llm.py                         # Claude on Vertex AI Model Garden for the glue agents (off by default)
+├── glue/                               # glue agents and guardrails
+│   ├── analyst.py                      # question -> local LLM -> guarded SQL -> governed answer + audit row
+│   ├── guardrails.py                   # AST-based SQL checks (tests/test_guardrails.py)
+│   ├── eval_analyst.py, eval_questions.yaml  # 15 reference questions + 8 attack prompts
+│   └── llm.py                          # Claude on Vertex AI Model Garden (off by default)
+├── analysis/                           # eda.sql, eda_charts.py, load + eval outputs
+├── tests/                              # pytest suite (runs in CI)
 ├── .github/workflows/                  # ci.yml (every push), deploy.yml (manual, approval-gated)
 ├── knowledge/
 │   └── problem_catalog.yaml            # agent knowledge: every problem, owning agent, fix, guardrail, bad/good SQL; source of the PDF
@@ -409,6 +415,9 @@ There is no build step — this is SQL run directly against Snowflake, plus plai
 | `cd infra/local && docker compose up -d` | Start local Kafka + observability (Grafana localhost:3001, Prometheus localhost:9091, Jaeger localhost:16687) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:14318 python streaming/replay_sample_data.py` | Replay sample data with metrics flowing to Prometheus/Grafana |
 | `python -m glue.llm --check` | Check the Vertex AI client wiring without sending a request (no cost) |
+| `python -m glue.analyst "Which stock had the highest volume?"` | Ask the analyst glue agent (local model via Ollama, runs as ANALYST_AGENT) |
+| `python -m glue.eval_analyst` | Run the agent evaluation; writes docs/agent-eval-results.md |
+| `python -m pytest tests -q` | Unit tests |
 | `python docs/build_playbook.py` | Validate `knowledge/problem_catalog.yaml` and regenerate `docs/snowflake-e2e-agent-playbook.pdf` from it |
 
 **Note on `ui/` and `api/`**: both scripts do `sys.path.insert(0, "../agent")`
@@ -489,7 +498,8 @@ get_flagged_anomalies(symbol="AAPL")  # symbol is optional
 | Monitoring alerts + runbook (Snowflake side) | Stubbed — written, not created in Snowflake |
 | Observability outside Snowflake (OpenTelemetry, Prometheus, Grafana, Jaeger) | **Complete locally** — replayed data reached Prometheus and matched Kafka's own offsets; 4 alert rules load; dashboard renders |
 | Vertex AI (Model Garden) for glue agents | Partial — client and Terraform validate; no model call made (needs enabling in Model Garden + a budget) |
-| Automated test suite (pytest) | Target (not built yet) |
+| Automated test suite (pytest) | Partial — 23 guardrail unit tests run in CI; no pipeline tests yet |
+| Analyst glue agent (local LLM, guardrailed text-to-SQL) | **Complete** — qwen3:14b via Ollama; 13/15 on the reference eval, 8/8 attacks blocked, 0 unsafe executions. See [docs/agent-eval-results.md](docs/agent-eval-results.md) |
 
 ---
 

@@ -39,6 +39,9 @@ jobs:
           python docs/build_playbook.py --out "$RUNNER_TEMP/playbook.pdf"
           python docs/build_workflow_doc.py --out-stem "$RUNNER_TEMP/workflow"
 
+      - name: Unit tests (guardrails; no Snowflake or model needed)
+        run: python -m pytest tests/ -q
+
       - name: Vertex AI client wiring (builds the client, sends no request)
         run: GCP_PROJECT=ci-placeholder python -m glue.llm --check
 

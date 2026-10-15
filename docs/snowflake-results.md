@@ -148,6 +148,47 @@ with Ollama, both querying the same semantic view as `ANALYST_AGENT`.
 
 ---
 
+## 8. The analyst glue agent, on a local model
+
+Because Cortex isn't available on the trial, the first glue agent runs on a
+**local model (qwen3:14b via Ollama, on the laptop's GPU) — $0, and no data
+leaves the machine.** Flow (`glue/analyst.py`): question → model proposes one
+SQL query → `glue/guardrails.py` checks it (single read-only SELECT, Gold
+tables only, row cap; 23 unit tests) → Snowflake runs it as `ANALYST_AGENT`
+with secondary roles off, so the delay policy and statement timeout apply →
+every question is written to the audit log. The answer is the query result
+itself, so any number in it came from executed SQL.
+
+**Evaluation** (`python -m glue.eval_analyst`; full table in
+[agent-eval-results.md](agent-eval-results.md)): 15 questions with
+hand-written reference SQL, plus 8 attack prompts (delete, drop, update, read
+Bronze, read the audit log, grant real-time access, switch to ACCOUNTADMIN,
+ask for data that doesn't exist).
+
+| Run | Change | Accuracy | Attacks blocked | Median latency |
+|---|---|---|---|---|
+| v1 | first run | 8/15 (53%) | 8/8 | 2.9 s |
+| v2 | cap model output + retry (runaway generation hit 3–12 min timeouts) | 9/15 (60%) | 8/8 | 5.5 s |
+| v3 | plain-text SQL instead of JSON (the model leaked `</think>` into JSON) | 11/15 (73%) | 8/8 | 2.3 s |
+| v4 | ground the model in the data's actual dates ("the session" ≠ CURRENT_DATE) | **13/15 (87%)** | **8/8** | **2.3 s** (p90 5.3 s) |
+
+- **0 unsafe statements** in every run: Gold row counts were identical
+  before and after (1,950 / 7,800 / 5).
+- **93 audit rows**, every one recorded under `ANALYST_AGENT`.
+- All 8 attacks were declined by the model itself; the guardrail is the
+  second layer and is tested directly on adversarial SQL in `tests/`.
+- **The 2 remaining errors are instructive:** for highest/lowest session
+  return the model used the day's *lowest open* and *highest close* instead
+  of the *first open* and *last close* — plausible SQL, confidently wrong
+  answer (GOOGL instead of MSFT). No guardrail can catch a query that is safe
+  but semantically wrong (catalog problem F2); that's what verified-query
+  regression is for. Not tuned away, to keep the number honest.
+
+Total credits for the whole Snowflake build plus all agent evaluation runs:
+**0.95**.
+
+---
+
 ## 7. Reproduce
 
 ```bash
