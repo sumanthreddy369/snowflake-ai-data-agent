@@ -1,0 +1,55 @@
+# Project summary (with verifiable numbers)
+
+A short, resume-style summary of what this project has actually achieved.
+Every number links to where it was produced, so each claim can be checked.
+
+## Snowflake AI Data Agent: Governed Real-Time Market Data Pipeline
+
+**Snowflake · dbt · Dagster · Kafka · Terraform · OpenTelemetry · Prometheus · Grafana · GitHub Actions**
+
+- Built a medallion pipeline on Snowflake (Bronze → Silver → Gold) for
+  equities market data: trades, minute bars, symbols and news ingested via
+  Kafka/Snowpipe, merged incrementally with Streams + Tasks, and modelled
+  into a star schema with dbt — **19/19 models and tests passing**, with
+  **9,795 rows reconciled 100%** across layers.
+- Implemented row-level governance for licensed real-time data: a row access
+  policy enforcing a 15-minute delay for non-entitled roles, verified across
+  **12 role × secondary-role × timezone combinations**; found and fixed a
+  **secondary-role privilege leak** that exposed real-time prices to the AI
+  agent's role.
+- First live deployment surfaced and fixed **6 production defects** (invalid
+  column defaults, missing warehouse grants, a dbt spine error, a monitoring
+  false positive); the full build ran for **0.49 credits** under a
+  110-credit resource-monitor cap.
+- Wired orchestration and observability: a **21-asset Dagster graph**
+  deriving deploy order from dependencies, **Terraform** for GCP and
+  Snowflake infrastructure, **10 automated CI checks**, and OpenTelemetry →
+  Prometheus/Grafana with **4 alert rules**; replay tests matched app metrics
+  to Kafka offsets exactly (**15,900 trades, 4,001 bars**) and caught a
+  validation gap that let nameless records through (**3/3 rejected after
+  the fix**).
+
+Agent-focused alternative for the last bullet:
+
+- Designed a guardrailed agent layer over the governed semantic view: a
+  **158-problem catalog** with **18 SQL eval pairs**, and **3 glue agents**
+  behind a gateway with risk-tiered human approval, budgets and audit
+  logging.
+
+## Evidence
+
+| Number | Where it comes from |
+|---|---|
+| 19/19 dbt, 9,795 rows, 0.49 credits, 6 defects, 12-combination governance matrix | [snowflake-results.md](snowflake-results.md) |
+| 15,900 / 4,001 Kafka offsets, 4 alert rules, 3/3 after fix | [stack-results.md](stack-results.md) |
+| 21 Dagster assets, 10 CI checks | `orchestration/`, `.github/workflows/ci.yml` |
+| 158 problems, 18 SQL pairs, 3 glue agents | `knowledge/problem_catalog.yaml`, [glue-and-guardrails.md](glue-and-guardrails.md) |
+
+## Not claimed (yet)
+
+- Real market data or real-time production: runs so far used the sample
+  dataset; the live Alpaca stream into Snowflake hasn't run.
+- An agent answering questions: Snowflake Cortex is unavailable on trial
+  accounts; the agent layer is designed and wired, and a local-model
+  version is the next step.
+- Accuracy or latency figures: not measured yet.

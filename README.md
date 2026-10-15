@@ -14,6 +14,8 @@ and locally verified where that's possible without an account (see
 [Feature status](#feature-status)), but none of it has been run against a
 live Kafka broker connected to Snowflake, GCS bucket, or Alpaca connection yet; the Snowflake layers have now run on a trial account (see below).
 
+**Project summary with verifiable numbers:** [docs/project-summary.md](docs/project-summary.md)
+
 **Results so far, with screenshots:**
 - [docs/snowflake-results.md](docs/snowflake-results.md) — the pipeline run on Snowflake: Bronze → Silver → Gold, EDA in Snowsight, the 15-minute delay policy tested, and six bugs the live run found and fixed.
 - [docs/stack-results.md](docs/stack-results.md) — the local Kafka + observability stack run end to end, including a validation bug it caught.
