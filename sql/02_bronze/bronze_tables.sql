@@ -8,6 +8,9 @@
 -- NTZ column and put _loaded_at hours away from the UTC event timestamps it's
 -- compared against (e.g. when measuring how late data arrives). The same
 -- convention applies in every Silver, documents and governance table.
+-- _source_file has no default: METADATA$FILENAME exists only inside a COPY
+-- transformation (Snowflake rejects it as a column default, error 000904 --
+-- found on the first live run), so every load selects it explicitly.
 
 CREATE DATABASE IF NOT EXISTS MARKET_AGENT;
 CREATE SCHEMA IF NOT EXISTS MARKET_AGENT.BRONZE;
@@ -21,7 +24,7 @@ CREATE TABLE IF NOT EXISTS MARKET_AGENT.BRONZE.RAW_TRADES (
   conditions        VARCHAR,   -- raw trade condition codes, comma-joined
   trade_ts          VARCHAR,   -- raw ISO8601 string; parsed/cast in Silver
   _loaded_at        TIMESTAMP_NTZ DEFAULT SYSDATE(),
-  _source_file      VARCHAR DEFAULT METADATA$FILENAME
+  _source_file      VARCHAR   -- set by COPY: METADATA$FILENAME
 );
 
 CREATE TABLE IF NOT EXISTS MARKET_AGENT.BRONZE.RAW_BARS (
@@ -35,7 +38,7 @@ CREATE TABLE IF NOT EXISTS MARKET_AGENT.BRONZE.RAW_BARS (
   vwap              VARCHAR,
   trade_count       VARCHAR,
   _loaded_at        TIMESTAMP_NTZ DEFAULT SYSDATE(),
-  _source_file      VARCHAR DEFAULT METADATA$FILENAME
+  _source_file      VARCHAR   -- set by COPY: METADATA$FILENAME
 );
 
 CREATE TABLE IF NOT EXISTS MARKET_AGENT.BRONZE.RAW_SYMBOLS (
@@ -45,5 +48,5 @@ CREATE TABLE IF NOT EXISTS MARKET_AGENT.BRONZE.RAW_SYMBOLS (
   exchange          VARCHAR,
   is_active         VARCHAR,
   _loaded_at        TIMESTAMP_NTZ DEFAULT SYSDATE(),
-  _source_file      VARCHAR DEFAULT METADATA$FILENAME
+  _source_file      VARCHAR   -- set by COPY: METADATA$FILENAME
 );

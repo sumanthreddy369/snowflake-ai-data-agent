@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS MARKET_AGENT.BRONZE.RAW_NEWS (
   url           VARCHAR,
   published_at  VARCHAR,   -- raw string; parsed/cast in Silver
   _loaded_at    TIMESTAMP_NTZ DEFAULT SYSDATE(),
-  _source_file  VARCHAR DEFAULT METADATA$FILENAME
+  _source_file  VARCHAR   -- set by COPY: METADATA$FILENAME
 );
 
 CREATE TABLE IF NOT EXISTS MARKET_AGENT.SILVER.NEWS (
@@ -64,6 +64,9 @@ ALTER TASK MARKET_AGENT.SILVER.MERGE_NEWS_TASK RESUME;
 -- agent can answer "what's the recent news on AAPL" and cite a real URL.
 -- TARGET_LAG controls how fresh the index is relative to Silver -- 1 hour is
 -- reasonable for news (unlike prices, headlines don't need <1min freshness).
+-- Not available on Snowflake trial accounts: embedding functions are blocked
+-- there ("EMBED_TEXT_1024 is not available for trial accounts", seen on the
+-- first live run, 15 Oct 2026), so this statement needs a paid account.
 CREATE CORTEX SEARCH SERVICE IF NOT EXISTS MARKET_AGENT.SILVER.NEWS_SEARCH_SERVICE
   ON content
   ATTRIBUTES symbols, source, url, published_at, headline

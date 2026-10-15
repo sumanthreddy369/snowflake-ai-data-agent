@@ -106,7 +106,9 @@ def silver_tasks_healthy(snowflake: SnowflakeResource) -> AssetCheckResult:
     failures = _scalar(snowflake, """
         SELECT COUNT(*) FROM TABLE(MARKET_AGENT.INFORMATION_SCHEMA.TASK_HISTORY(
             SCHEDULED_TIME_RANGE_START => DATEADD('hour', -1, CURRENT_TIMESTAMP()),
-            ERROR_ONLY => TRUE))""")
+            ERROR_ONLY => TRUE))
+        -- TASK_HISTORY also returns Snowflake's own system tasks; only ours count.
+        WHERE database_name = 'MARKET_AGENT'""")
     return AssetCheckResult(passed=failures == 0, severity=AssetCheckSeverity.ERROR,
                             metadata={"failed_task_runs_last_hour": failures})
 

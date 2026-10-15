@@ -67,6 +67,8 @@ CREATE ALERT IF NOT EXISTS MARKET_AGENT.GOVERNANCE.PIPELINE_TASK_FAILED
     SELECT 1 FROM TABLE(MARKET_AGENT.INFORMATION_SCHEMA.TASK_HISTORY(
       SCHEDULED_TIME_RANGE_START => DATEADD('minute', -15, CURRENT_TIMESTAMP()),
       ERROR_ONLY => TRUE))
+    -- TASK_HISTORY also returns Snowflake's own system tasks; only ours count.
+    WHERE database_name = 'MARKET_AGENT'
   ))
   THEN CALL SYSTEM$SEND_EMAIL('MARKET_AGENT_EMAIL_INT', '<oncall-email>',
     '[SEV-2] market-agent: pipeline task failed',

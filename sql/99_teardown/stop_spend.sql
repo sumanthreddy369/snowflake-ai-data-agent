@@ -8,12 +8,13 @@
 
 -- ============================================================ LEVEL 0: CAP
 -- Run once, first. Caps ALL warehouse spend in the account per month:
--- notify at 80%, hard-stop every warehouse at 100%.
+-- notify at 80%, hard-stop every warehouse at 100%. 110 credits leaves a margin
+-- under a $400 trial (~133 credits at ~$3/credit on Enterprise, AWS us-east-2).
 -- Limit: resource monitors cover warehouses only. Serverless features
 -- (Cortex Analyst/Search/Agents, Snowpipe, serverless tasks) are not capped
 -- by this -- level 1 below stops those.
 CREATE RESOURCE MONITOR IF NOT EXISTS TRIAL_SPEND_CAP
-  WITH CREDIT_QUOTA = 50
+  WITH CREDIT_QUOTA = 110
   FREQUENCY = MONTHLY
   START_TIMESTAMP = IMMEDIATELY
   TRIGGERS
