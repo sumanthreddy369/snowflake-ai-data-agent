@@ -1,0 +1,672 @@
+[
+  {
+    "scenario": "duplicate_bars",
+    "fault": "C1 Duplicates after a connector restart",
+    "detected": true,
+    "failing_checks": [
+      "No duplicate (symbol, minute) bars: 50 duplicates"
+    ],
+    "expected_action": "dedupe_silver_bars",
+    "action": "dedupe_silver_bars",
+    "action_correct": true,
+    "problem_id": "C1",
+    "id_accepted": true,
+    "fixed": true,
+    "decided_by": "model",
+    "steps": 4,
+    "tool_calls": {
+      "run_sql": 2,
+      "search_catalog": 1,
+      "submit_diagnosis": 1
+    },
+    "guardrail_blocks": 0,
+    "doctor_s": 131.9,
+    "total_s": 208.0,
+    "report_md": "## Pipeline doctor report: `MARKET_AGENT_CI_DOCTOR_DUPLICATE_BARS`\n\n**Failing checks:**\n- No duplicate (symbol, minute) bars: 50 duplicates\n\n**Diagnosis:** catalog `C1`, Duplicates in SILVER.BARS due to a connector restart or channel reopening, leading to rows loading twice.\n\n**Evidence:** There are 50 duplicate (symbol, minute) bars in GOLD.FCT_BARS, and SILVER.BARS also contains duplicate entries for the same (symbol, bar_ts) pairs.\n\n**Action:** `dedupe_silver_bars` (decided by model)\n\n**Applied in the clone:**\n```sql\nINSERT OVERWRITE INTO MARKET_AGENT_CI_DOCTOR_DUPLICATE_BARS.SILVER.BARS SELECT * FROM MARKET_AGENT_CI_DOCTOR_DUPLICATE_BARS.SILVER.BARS QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol, bar_ts ORDER BY _updated_at DESC) = 1\ndbt build --target ci  (passed)\n```\n**Verified:** yes, all checks pass\n\n**Proposed for production (runs only after human approval):**\n```sql\nINSERT OVERWRITE INTO MARKET_AGENT.SILVER.BARS SELECT * FROM MARKET_AGENT.SILVER.BARS QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol, bar_ts ORDER BY _updated_at DESC) = 1\ndbt build --target prod  (snowflake-cd.yml, approval-gated)\n```\n\n_4 model steps, tools {'run_sql': 2, 'search_catalog': 1, 'submit_diagnosis': 1}, 0 guardrail blocks, 131.9 s, model qwen3:14b (local)._",
+    "transcript": [
+      {
+        "step": 1,
+        "model": "",
+        "tool_calls": [
+          {
+            "id": "call_n92hdmi9",
+            "function": {
+              "index": 0,
+              "name": "run_sql",
+              "arguments": {
+                "sql": "SELECT symbol, bar_ts, COUNT(*) as count FROM MARKET_AGENT_CI_DOCTOR_DUPLICATE_BARS.GOLD.FCT_BARS GROUP BY symbol, bar_ts HAVING COUNT(*) > 1 LIMIT 20;"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "step": 1,
+        "tool": "run_sql",
+        "args": {
+          "sql": "SELECT symbol, bar_ts, COUNT(*) as count FROM MARKET_AGENT_CI_DOCTOR_DUPLICATE_BARS.GOLD.FCT_BARS GROUP BY symbol, bar_ts HAVING COUNT(*) > 1 LIMIT 20;"
+        },
+        "result": "{\"columns\": [\"SYMBOL\", \"BAR_TS\", \"COUNT\"], \"rows\": [[\"AAPL\", \"2026-09-25 13:30:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:31:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:32:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:33:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:36:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:39:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:42:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:43:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:44:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:45:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:47:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:50:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:51:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:52:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:55:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:56:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:59:00\", \"2\"], [\"AAPL\", \"2026-09-25 14:02:00\", \"2\"], [\"AAPL\", \"2026-09-25 14:03:00\", \"2\"], [\"AAPL\", \"2026-09-25 14:04:00\", \"2\"]]}"
+      },
+      {
+        "step": 2,
+        "model": "",
+        "tool_calls": [
+          {
+            "id": "call_u1djccxh",
+            "function": {
+              "index": 0,
+              "name": "run_sql",
+              "arguments": {
+                "sql": "SELECT symbol, bar_ts, COUNT(*) as count FROM MARKET_AGENT_CI_DOCTOR_DUPLICATE_BARS.SILVER.BARS GROUP BY symbol, bar_ts HAVING COUNT(*) > 1 LIMIT 20;"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "step": 2,
+        "tool": "run_sql",
+        "args": {
+          "sql": "SELECT symbol, bar_ts, COUNT(*) as count FROM MARKET_AGENT_CI_DOCTOR_DUPLICATE_BARS.SILVER.BARS GROUP BY symbol, bar_ts HAVING COUNT(*) > 1 LIMIT 20;"
+        },
+        "result": "{\"columns\": [\"SYMBOL\", \"BAR_TS\", \"COUNT\"], \"rows\": [[\"AAPL\", \"2026-09-25 13:30:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:31:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:32:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:35:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:36:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:37:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:38:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:39:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:42:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:43:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:44:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:46:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:48:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:49:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:50:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:51:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:53:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:58:00\", \"2\"], [\"AAPL\", \"2026-09-25 13:59:00\", \"2\"], [\"AAPL\", \"2026-09-25 14:02:00\", \"2\"]]}"
+      },
+      {
+        "step": 3,
+        "model": "",
+        "tool_calls": [
+          {
+            "id": "call_p4d7bxlh",
+            "function": {
+              "index": 0,
+              "name": "search_catalog",
+              "arguments": {
+                "keywords": "duplicate bars in silver"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "step": 3,
+        "tool": "search_catalog",
+        "args": {
+          "keywords": "duplicate bars in silver"
+        },
+        "result": "[{\"id\": \"C1\", \"title\": \"Duplicates after a connector restart\", \"symptom\": \"Offset tokens reset or channels are reopened, so rows load twice.\", \"solution\": \"DQ checks Bronze duplicate rate per channel after every restart event and reports it; Silver MERGE dedupes by key.\"}, {\"id\": \"A3\", \"title\": \"Reconnect duplicates and gaps\", \"symptom\": \"After a reconnect some trades repeat and some minutes are missing.\", \"solution\": \"DQ finds missing minute bars per symbol and duplicate trade_ids, then asks WATCH to backfill the exact window via REST.\"}, {\"id\": \"U1\", \"title\": \"Can't find the right table\", \"symptom\": \"RAW_BARS, SILVER.BARS, FCT_BARS and SYMBOLS_DT all look like 'the bars table'.\", \"solution\": \"CURATOR tags certified Gold objects and writes 'use this, not that' notes; ANALYST answers 'where is X' questions from them.\"}, {\"id\": \"O2\", \"title\": \"Reconciliation across layers\", \"symptom\": \"Kafka offsets vs Bronze rows vs Silver vs Gold don't add up.\", \"solution\": \"DQ runs per-hour count reconciliation and reports the layer where rows disappear.\"}, {\"id\": \"K4\", \"title\": \"Trades don't match bars\", \"symptom\": \"Bars rebuilt from trades differ from vendor bars (feed coverage, condition filters, boundary inclusive/exclusive).\", \"solution\": \"DQ reconciles rebuilt vs vendor bars within a tolerance and explains each difference type.\"}]"
+      },
+      {
+        "step": 4,
+        "model": "",
+        "tool_calls": [
+          {
+            "id": "call_u2ia7075",
+            "function": {
+              "index": 0,
+              "name": "submit_diagnosis",
+              "arguments": {
+                "action": "dedupe_silver_bars",
+                "problem_id": "C1",
+                "root_cause": "Duplicates in SILVER.BARS due to a connector restart or channel reopening, leading to rows loading twice.",
+                "evidence": "There are 50 duplicate (symbol, minute) bars in GOLD.FCT_BARS, and SILVER.BARS also contains duplicate entries for the same (symbol, bar_ts) pairs."
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "scenario": "bad_ohlc_prints",
+    "fault": "L3 Bad prints",
+    "detected": true,
+    "failing_checks": [
+      "OHLC rules hold: 6 violations"
+    ],
+    "expected_action": "quarantine_bad_bars",
+    "action": "quarantine_bad_bars",
+    "action_correct": true,
+    "problem_id": "L3",
+    "id_accepted": true,
+    "fixed": true,
+    "decided_by": "model",
+    "steps": 3,
+    "tool_calls": {
+      "run_sql": 1,
+      "search_catalog": 1,
+      "submit_diagnosis": 1
+    },
+    "guardrail_blocks": 0,
+    "doctor_s": 94.3,
+    "total_s": 164.7,
+    "report_md": "## Pipeline doctor report: `MARKET_AGENT_CI_DOCTOR_BAD_OHLC_PRINTS`\n\n**Failing checks:**\n- OHLC rules hold: 6 violations\n\n**Diagnosis:** catalog `L3`, OHLC rules are violated due to bad prints that the 10% rule misses.\n\n**Evidence:** There are 6 violations in the OHLC rules, as seen in the query results where open, high, low, and close values do not follow the expected order.\n\n**Action:** `quarantine_bad_bars` (decided by model)\n\n**Applied in the clone:**\n```sql\nCREATE TABLE IF NOT EXISTS MARKET_AGENT_CI_DOCTOR_BAD_OHLC_PRINTS.SILVER.BARS_QUARANTINE LIKE MARKET_AGENT_CI_DOCTOR_BAD_OHLC_PRINTS.SILVER.BARS\nINSERT INTO MARKET_AGENT_CI_DOCTOR_BAD_OHLC_PRINTS.SILVER.BARS_QUARANTINE SELECT * FROM MARKET_AGENT_CI_DOCTOR_BAD_OHLC_PRINTS.SILVER.BARS WHERE high < low OR high < GREATEST(open, close) OR low > LEAST(open, close)\nDELETE FROM MARKET_AGENT_CI_DOCTOR_BAD_OHLC_PRINTS.SILVER.BARS WHERE high < low OR high < GREATEST(open, close) OR low > LEAST(open, close)\ndbt build --target ci  (passed)\n```\n**Verified:** yes, all checks pass\n\n**Proposed for production (runs only after human approval):**\n```sql\nCREATE TABLE IF NOT EXISTS MARKET_AGENT.SILVER.BARS_QUARANTINE LIKE MARKET_AGENT.SILVER.BARS\nINSERT INTO MARKET_AGENT.SILVER.BARS_QUARANTINE SELECT * FROM MARKET_AGENT.SILVER.BARS WHERE high < low OR high < GREATEST(open, close) OR low > LEAST(open, close)\nDELETE FROM MARKET_AGENT.SILVER.BARS WHERE high < low OR high < GREATEST(open, close) OR low > LEAST(open, close)\ndbt build --target prod  (snowflake-cd.yml, approval-gated)\n```\n\n_3 model steps, tools {'run_sql': 1, 'search_catalog': 1, 'submit_diagnosis': 1}, 0 guardrail blocks, 94.3 s, model qwen3:14b (local)._",
+    "transcript": [
+      {
+        "step": 1,
+        "model": "",
+        "tool_calls": [
+          {
+            "id": "call_0qvpfbov",
+            "function": {
+              "index": 0,
+              "name": "run_sql",
+              "arguments": {
+                "sql": "SELECT * FROM MARKET_AGENT_CI_DOCTOR_BAD_OHLC_PRINTS.GOLD.FCT_BARS WHERE open > high OR open > low OR open > close OR high < low OR high < open OR high < close OR low > open OR low > close OR low > high OR close > high OR close < low OR close < open OR close < high OR close < low;"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "step": 1,
+        "tool": "run_sql",
+        "args": {
+          "sql": "SELECT * FROM MARKET_AGENT_CI_DOCTOR_BAD_OHLC_PRINTS.GOLD.FCT_BARS WHERE open > high OR open > low OR open > close OR high < low OR high < open OR high < close OR low > open OR low > close OR low > high OR close > high OR close < low OR close < open OR close < high OR close < low;"
+        },
+        "result": "{\"columns\": [\"SYMBOL\", \"DATE_KEY\", \"BAR_TS\", \"OPEN\", \"HIGH\", \"LOW\", \"CLOSE\", \"VOLUME\", \"VWAP\", \"TRADE_COUNT\", \"BAR_RETURN\", \"ROLLING_VOLATILITY_30\", \"IS_SUSPECT\"], \"rows\": [[\"TSLA\", \"2026-09-25 00:00:00\", \"2026-09-25 13:30:00\", \"250.0000\", \"250.1806\", \"249.7567\", \"249.7567\", \"4672\", \"250.0161\", \"4\", \"-0.0009732000\", \"None\", \"False\"], [\"TSLA\", \"2026-09-25 00:00:00\", \"2026-09-25 13:31:00\", \"249.7567\", \"250.0068\", \"249.7228\", \"249.7228\", \"6940\", \"249.8556\", \"4\", \"-0.0001357321\", \"0.0005921790269842389\", \"False\"], [\"TSLA\", \"2026-09-25 00:00:00\", \"2026-09-25 13:32:00\", \"249.7228\", \"250.1046\", \"249.7228\", \"249.9404\", \"7045\", \"249.9170\", \"4\", \"0.0008713662\", \"0.0009235821566054641\", \"False\"], [\"TSLA\", \"2026-09-25 00:00:00\", \"2026-09-25 13:33:00\", \"249.9404\", \"249.9404\", \"248.9676\", \"248.9676\", \"7808\", \"249.4757\", \"4\", \"-0.0038921279\", \"0.0020501941371489675\", \"False\"], [\"TSLA\", \"2026-09-25 00:00:00\", \"2026-09-25 13:34:00\", \"248.9676\", \"248.9676\", \"247.7336\", \"247.7336\", \"16998\", \"248.4715\", \"4\", \"-0.0049564682\", \"0.0024964168321816773\", \"False\"], [\"TSLA\", \"2026-09-25 00:00:00\", \"2026-09-25 13:35:00\", \"247.7336\", \"247.7336\", \"247.2201\", \"247.2413\", \"42789\", \"247.4399\", \"4\", \"-0.0019872153\", \"0.0022339413600182077\", \"False\"], [\"TSLA\", \"2026-09-25 00:00:00\", \"2026-09-25 13:36:00\", \"247.2413\", \"247.3521\", \"246.9987\", \"246.9987\", \"7805\", \"247.1274\", \"4\", \"-0.0009812277\", \"0.002065301430784378\", \"False\"], [\"TSLA\", \"2026-09-25 00:00:00\", \"2026-09-25 13:37:00\", \"246.9987\", \"247.2298\", \"246."
+      },
+      {
+        "step": 2,
+        "model": "",
+        "tool_calls": [
+          {
+            "id": "call_ub6kp5hw",
+            "function": {
+              "index": 0,
+              "name": "search_catalog",
+              "arguments": {
+                "keywords": "OHLC rules violated"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "step": 2,
+        "tool": "search_catalog",
+        "args": {
+          "keywords": "OHLC rules violated"
+        },
+        "result": "[{\"id\": \"L3\", \"title\": \"Bad prints the 10% rule misses\", \"symptom\": \"Outliers within 10%, or legitimate moves above it.\", \"solution\": \"DQ scores bars with the ONNX anomaly model alongside is_suspect and reports disagreements.\"}, {\"id\": \"L4\", \"title\": \"Illiquid gaps\", \"symptom\": \"Thin symbols have minutes with no trades; teams disagree on forward-fill.\", \"solution\": \"CURATOR documents one gap rule; XFORM implements it consistently.\"}, {\"id\": \"S3\", \"title\": \"Owners grant access around the rules\", \"symptom\": \"Whoever owns a table can grant it to anyone, bypassing central access control.\", \"solution\": \"GUARD recommends WITH MANAGED ACCESS on GOLD so only the security role grants access.\"}, {\"id\": \"A6\", \"title\": \"Trade corrections and cancels\", \"symptom\": \"Exchanges cancel or correct prints; condition codes mark odd-lot or out-of-sequence trades.\", \"solution\": \"XFORM proposes a condition-code filter in stg_trades; DQ reports how many trades each rule removes.\"}, {\"id\": \"K8\", \"title\": \"Session timezone vs NTZ\", \"symptom\": \"CURRENT_TIMESTAMP() is TIMESTAMP_LTZ; comparing it with a UTC NTZ column depends on the session TIMEZONE. With Snowflake's default America/Los_Angeles, a 15-minute delay rule can hide hours of data. Found in this repo's DELAYED_DATA_POLICY and load-time defaults; fixed to use SYSDATE().\", \"solution\": \"GUARD tests the policy under several session timezones and fails if the visible window changes.\"}]"
+      },
+      {
+        "step": 3,
+        "model": "",
+        "tool_calls": [
+          {
+            "id": "call_fw8lryzd",
+            "function": {
+              "index": 0,
+              "name": "submit_diagnosis",
+              "arguments": {
+                "problem_id": "L3",
+                "root_cause": "OHLC rules are violated due to bad prints that the 10% rule misses.",
+                "evidence": "There are 6 violations in the OHLC rules, as seen in the query results where open, high, low, and close values do not follow the expected order.",
+                "action": "quarantine_bad_bars"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "scenario": "late_data_gold_stale",
+    "fault": "K5 Late data after aggregates are built",
+    "detected": true,
+    "failing_checks": [
+      "Silver.BARS = Gold.FCT_BARS: 1,980 = 1,950"
+    ],
+    "expected_action": "rebuild_gold",
+    "action": "rebuild_gold",
+    "action_correct": true,
+    "problem_id": "O2",
+    "id_accepted": true,
+    "fixed": true,
+    "decided_by": "model",
+    "steps": 3,
+    "tool_calls": {
+      "run_sql": 4,
+      "search_catalog": 1,
+      "submit_diagnosis": 1
+    },
+    "guardrail_blocks": 0,
+    "doctor_s": 114.8,
+    "total_s": 189.8,
+    "report_md": "## Pipeline doctor report: `MARKET_AGENT_CI_DOCTOR_LATE_DATA_GOLD_STALE`\n\n**Failing checks:**\n- Silver.BARS = Gold.FCT_BARS: 1,980 = 1,950\n\n**Diagnosis:** catalog `O2`, Gold.FCT_BARS is missing rows compared to Silver.BARS, indicating a reconciliation issue across layers.\n\n**Evidence:** Silver.BARS has 1,980 rows, while Gold.FCT_BARS has 1,950 rows. This discrepancy suggests that some rows are not being properly transferred or processed during the dbt build.\n\n**Action:** `rebuild_gold` (decided by model)\n\n**Applied in the clone:**\n```sql\ndbt build --target ci  (passed)\n```\n**Verified:** yes, all checks pass\n\n**Proposed for production (runs only after human approval):**\n```sql\ndbt build --target prod  (snowflake-cd.yml, approval-gated)\n```\n\n_3 model steps, tools {'run_sql': 4, 'search_catalog': 1, 'submit_diagnosis': 1}, 0 guardrail blocks, 114.8 s, model qwen3:14b (local)._",
+    "transcript": [
+      {
+        "step": 1,
+        "model": "",
+        "tool_calls": [
+          {
+            "id": "call_d3wna1xm",
+            "function": {
+              "index": 0,
+              "name": "run_sql",
+              "arguments": {
+                "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_LATE_DATA_GOLD_STALE.GOLD.FCT_BARS;"
+              }
+            }
+          },
+          {
+            "id": "call_zh3koi5o",
+            "function": {
+              "index": 1,
+              "name": "run_sql",
+              "arguments": {
+                "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_LATE_DATA_GOLD_STALE.SILVER.BARS;"
+              }
+            }
+          },
+          {
+            "id": "call_sefzd953",
+            "function": {
+              "index": 2,
+              "name": "run_sql",
+              "arguments": {
+                "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_LATE_DATA_GOLD_STALE.GOLD.FCT_BARS WHERE symbol = 'AAPL';"
+              }
+            }
+          },
+          {
+            "id": "call_ay5fkhgb",
+            "function": {
+              "index": 3,
+              "name": "run_sql",
+              "arguments": {
+                "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_LATE_DATA_GOLD_STALE.SILVER.BARS WHERE symbol = 'AAPL';"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "step": 1,
+        "tool": "run_sql",
+        "args": {
+          "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_LATE_DATA_GOLD_STALE.GOLD.FCT_BARS;"
+        },
+        "result": "{\"columns\": [\"COUNT(*)\"], \"rows\": [[\"1950\"]]}"
+      },
+      {
+        "step": 1,
+        "tool": "run_sql",
+        "args": {
+          "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_LATE_DATA_GOLD_STALE.SILVER.BARS;"
+        },
+        "result": "{\"columns\": [\"COUNT(*)\"], \"rows\": [[\"1980\"]]}"
+      },
+      {
+        "step": 1,
+        "tool": "run_sql",
+        "args": {
+          "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_LATE_DATA_GOLD_STALE.GOLD.FCT_BARS WHERE symbol = 'AAPL';"
+        },
+        "result": "{\"columns\": [\"COUNT(*)\"], \"rows\": [[\"390\"]]}"
+      },
+      {
+        "step": 1,
+        "tool": "run_sql",
+        "args": {
+          "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_LATE_DATA_GOLD_STALE.SILVER.BARS WHERE symbol = 'AAPL';"
+        },
+        "result": "{\"columns\": [\"COUNT(*)\"], \"rows\": [[\"420\"]]}"
+      },
+      {
+        "step": 2,
+        "model": "",
+        "tool_calls": [
+          {
+            "id": "call_54r0lc0u",
+            "function": {
+              "index": 0,
+              "name": "search_catalog",
+              "arguments": {
+                "keywords": "missing rows gold fct_bars"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "step": 2,
+        "tool": "search_catalog",
+        "args": {
+          "keywords": "missing rows gold fct_bars"
+        },
+        "result": "[{\"id\": \"U1\", \"title\": \"Can't find the right table\", \"symptom\": \"RAW_BARS, SILVER.BARS, FCT_BARS and SYMBOLS_DT all look like 'the bars table'.\", \"solution\": \"CURATOR tags certified Gold objects and writes 'use this, not that' notes; ANALYST answers 'where is X' questions from them.\"}, {\"id\": \"A3\", \"title\": \"Reconnect duplicates and gaps\", \"symptom\": \"After a reconnect some trades repeat and some minutes are missing.\", \"solution\": \"DQ finds missing minute bars per symbol and duplicate trade_ids, then asks WATCH to backfill the exact window via REST.\"}, {\"id\": \"O2\", \"title\": \"Reconciliation across layers\", \"symptom\": \"Kafka offsets vs Bronze rows vs Silver vs Gold don't add up.\", \"solution\": \"DQ runs per-hour count reconciliation and reports the layer where rows disappear.\"}, {\"id\": \"E4\", \"title\": \"Grants and policies lost on rebuild\", \"symptom\": \"CREATE OR REPLACE drops row access policies and table grants (found and fixed in this repo in commit a480e77).\", \"solution\": \"GUARD runs the POLICY_REFERENCES check after every dbt run; missing policy is a sev-1.\"}, {\"id\": \"Q4\", \"title\": \"Exploding or cartesian joins\", \"symptom\": \"A missing or wrong join condition produces billions of rows and a query that never finishes.\", \"solution\": \"SQLCOACH reads GET_QUERY_OPERATOR_STATS, finds the join whose output rows far exceed its inputs, and names the missing condition.\"}]"
+      },
+      {
+        "step": 3,
+        "model": "",
+        "tool_calls": [
+          {
+            "id": "call_nto77yda",
+            "function": {
+              "index": 0,
+              "name": "submit_diagnosis",
+              "arguments": {
+                "problem_id": "O2",
+                "root_cause": "Gold.FCT_BARS is missing rows compared to Silver.BARS, indicating a reconciliation issue across layers.",
+                "evidence": "Silver.BARS has 1,980 rows, while Gold.FCT_BARS has 1,950 rows. This discrepancy suggests that some rows are not being properly transferred or processed during the dbt build.",
+                "action": "rebuild_gold"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "scenario": "policy_dropped",
+    "fault": "E4 Grants and policies lost on rebuild",
+    "detected": true,
+    "failing_checks": [
+      "Delay policy attached to FCT_BARS: 0 reference(s)"
+    ],
+    "expected_action": "rebuild_gold",
+    "action": "rebuild_gold",
+    "action_correct": true,
+    "problem_id": "E4",
+    "id_accepted": true,
+    "fixed": true,
+    "decided_by": "model",
+    "steps": 3,
+    "tool_calls": {
+      "run_sql": 4,
+      "search_catalog": 1,
+      "submit_diagnosis": 1
+    },
+    "guardrail_blocks": 0,
+    "doctor_s": 102.3,
+    "total_s": 173.8,
+    "report_md": "## Pipeline doctor report: `MARKET_AGENT_CI_DOCTOR_POLICY_DROPPED`\n\n**Failing checks:**\n- Delay policy attached to FCT_BARS: 0 reference(s)\n\n**Diagnosis:** catalog `E4`, The row access policy (DELAYED_DATA_POLICY) was lost during the dbt build process, leading to the absence of the policy on the GOLD.FCT_BARS table.\n\n**Evidence:** The count of rows in GOLD.FCT_BARS (1950) matches SILVER.BARS (1950), indicating that the data was correctly transformed. However, the DELAYED_DATA_POLICY is not attached to GOLD.FCT_BARS, which suggests that the policy was not reapplied during the dbt build.\n\n**Action:** `rebuild_gold` (decided by model)\n\n**Applied in the clone:**\n```sql\ndbt build --target ci  (passed)\n```\n**Verified:** yes, all checks pass\n\n**Proposed for production (runs only after human approval):**\n```sql\ndbt build --target prod  (snowflake-cd.yml, approval-gated)\n```\n\n_3 model steps, tools {'run_sql': 4, 'search_catalog': 1, 'submit_diagnosis': 1}, 0 guardrail blocks, 102.3 s, model qwen3:14b (local)._",
+    "transcript": [
+      {
+        "step": 1,
+        "model": "",
+        "tool_calls": [
+          {
+            "id": "call_cxzedgsk",
+            "function": {
+              "index": 0,
+              "name": "run_sql",
+              "arguments": {
+                "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_POLICY_DROPPED.GOLD.FCT_BARS;"
+              }
+            }
+          },
+          {
+            "id": "call_mkxjc55g",
+            "function": {
+              "index": 1,
+              "name": "run_sql",
+              "arguments": {
+                "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_POLICY_DROPPED.SILVER.BARS;"
+              }
+            }
+          },
+          {
+            "id": "call_rn5twv7o",
+            "function": {
+              "index": 2,
+              "name": "run_sql",
+              "arguments": {
+                "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_POLICY_DROPPED.GOLD.FCT_TRADES;"
+              }
+            }
+          },
+          {
+            "id": "call_e4ezf0if",
+            "function": {
+              "index": 3,
+              "name": "run_sql",
+              "arguments": {
+                "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_POLICY_DROPPED.SILVER.TRADES;"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "step": 1,
+        "tool": "run_sql",
+        "args": {
+          "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_POLICY_DROPPED.GOLD.FCT_BARS;"
+        },
+        "result": "{\"columns\": [\"COUNT(*)\"], \"rows\": [[\"1950\"]]}"
+      },
+      {
+        "step": 1,
+        "tool": "run_sql",
+        "args": {
+          "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_POLICY_DROPPED.SILVER.BARS;"
+        },
+        "result": "{\"columns\": [\"COUNT(*)\"], \"rows\": [[\"1950\"]]}"
+      },
+      {
+        "step": 1,
+        "tool": "run_sql",
+        "args": {
+          "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_POLICY_DROPPED.GOLD.FCT_TRADES;"
+        },
+        "result": "{\"columns\": [\"COUNT(*)\"], \"rows\": [[\"7800\"]]}"
+      },
+      {
+        "step": 1,
+        "tool": "run_sql",
+        "args": {
+          "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_POLICY_DROPPED.SILVER.TRADES;"
+        },
+        "result": "{\"columns\": [\"COUNT(*)\"], \"rows\": [[\"7800\"]]}"
+      },
+      {
+        "step": 2,
+        "model": "",
+        "tool_calls": [
+          {
+            "id": "call_v9q428xe",
+            "function": {
+              "index": 0,
+              "name": "search_catalog",
+              "arguments": {
+                "keywords": "delayed data policy missing"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "step": 2,
+        "tool": "search_catalog",
+        "args": {
+          "keywords": "delayed data policy missing"
+        },
+        "result": "[{\"id\": \"K8\", \"title\": \"Session timezone vs NTZ\", \"symptom\": \"CURRENT_TIMESTAMP() is TIMESTAMP_LTZ; comparing it with a UTC NTZ column depends on the session TIMEZONE. With Snowflake's default America/Los_Angeles, a 15-minute delay rule can hide hours of data. Found in this repo's DELAYED_DATA_POLICY and load-time defaults; fixed to use SYSDATE().\", \"solution\": \"GUARD tests the policy under several session timezones and fails if the visible window changes.\"}, {\"id\": \"F6\", \"title\": \"\\u201cThe data is wrong\\u201d that is actually the 15-minute delay\", \"symptom\": \"Delayed-entitlement users see older prices than a live screen.\", \"solution\": \"ANALYST states the as-of timestamp and entitlement in every price answer.\"}, {\"id\": \"E4\", \"title\": \"Grants and policies lost on rebuild\", \"symptom\": \"CREATE OR REPLACE drops row access policies and table grants (found and fixed in this repo in commit a480e77).\", \"solution\": \"GUARD runs the POLICY_REFERENCES check after every dbt run; missing policy is a sev-1.\"}, {\"id\": \"G4\", \"title\": \"Audit gaps\", \"symptom\": \"Can't prove who asked what and what data they saw.\", \"solution\": \"GUARD reconciles AGENT_QUERY_AUDIT_LOG with QUERY_HISTORY and reports missing entries.\"}, {\"id\": \"G1\", \"title\": \"Licence leakage\", \"symptom\": \"A role that shouldn't see real-time prices gets them through a new grant or a new table.\", \"solution\": \"GUARD diffs grants daily and checks every new Gold table for the row access policy.\"}]"
+      },
+      {
+        "step": 3,
+        "model": "",
+        "tool_calls": [
+          {
+            "id": "call_xdbozx8n",
+            "function": {
+              "index": 0,
+              "name": "submit_diagnosis",
+              "arguments": {
+                "problem_id": "E4",
+                "root_cause": "The row access policy (DELAYED_DATA_POLICY) was lost during the dbt build process, leading to the absence of the policy on the GOLD.FCT_BARS table.",
+                "evidence": "The count of rows in GOLD.FCT_BARS (1950) matches SILVER.BARS (1950), indicating that the data was correctly transformed. However, the DELAYED_DATA_POLICY is not attached to GOLD.FCT_BARS, which suggests that the policy was not reapplied during the dbt build.",
+                "action": "rebuild_gold"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "scenario": "timezone_shift",
+    "fault": "A9 Timezone and DST bugs",
+    "detected": true,
+    "failing_checks": [
+      "All bars inside the regular session (UTC): 20 outside"
+    ],
+    "expected_action": "escalate",
+    "action": "escalate",
+    "action_correct": true,
+    "problem_id": "A9",
+    "id_accepted": true,
+    "fixed": null,
+    "decided_by": "model",
+    "steps": 5,
+    "tool_calls": {
+      "run_sql": 3,
+      "search_catalog": 1,
+      "submit_diagnosis": 1
+    },
+    "guardrail_blocks": 0,
+    "doctor_s": 55.7,
+    "total_s": 123.8,
+    "report_md": "## Pipeline doctor report: `MARKET_AGENT_CI_DOCTOR_TIMEZONE_SHIFT`\n\n**Failing checks:**\n- All bars inside the regular session (UTC): 20 outside\n\n**Diagnosis:** catalog `A9`, Timezone and DST bugs caused the bar timestamps to be outside the regular session (UTC).\n\n**Evidence:** 1950 bars were found outside the regular session (UTC) between 13:30 and 19:59.\n\n**Action:** `escalate` (decided by model)\n\n**Escalated:** no change made; a human takes it from this diagnosis.\n\n_5 model steps, tools {'run_sql': 3, 'search_catalog': 1, 'submit_diagnosis': 1}, 0 guardrail blocks, 55.7 s, model qwen3:14b (local)._",
+    "transcript": [
+      {
+        "step": 1,
+        "model": "",
+        "tool_calls": [
+          {
+            "id": "call_bzu09106",
+            "function": {
+              "index": 0,
+              "name": "run_sql",
+              "arguments": {
+                "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_TIMEZONE_SHIFT.GOLD.FCT_BARS WHERE bar_ts BETWEEN '2023-04-01 13:30:00' AND '2023-04-01 19:59:00';"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "step": 1,
+        "tool": "run_sql",
+        "args": {
+          "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_TIMEZONE_SHIFT.GOLD.FCT_BARS WHERE bar_ts BETWEEN '2023-04-01 13:30:00' AND '2023-04-01 19:59:00';"
+        },
+        "result": "{\"columns\": [\"COUNT(*)\"], \"rows\": [[\"0\"]]}"
+      },
+      {
+        "step": 2,
+        "model": "",
+        "tool_calls": [
+          {
+            "id": "call_i3pv34f8",
+            "function": {
+              "index": 0,
+              "name": "run_sql",
+              "arguments": {
+                "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_TIMEZONE_SHIFT.SILVER.BARS WHERE bar_ts BETWEEN '2023-04-01 13:30:00' AND '2023-04-01 19:59:00';"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "step": 2,
+        "tool": "run_sql",
+        "args": {
+          "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_TIMEZONE_SHIFT.SILVER.BARS WHERE bar_ts BETWEEN '2023-04-01 13:30:00' AND '2023-04-01 19:59:00';"
+        },
+        "result": "{\"columns\": [\"COUNT(*)\"], \"rows\": [[\"0\"]]}"
+      },
+      {
+        "step": 3,
+        "model": "",
+        "tool_calls": [
+          {
+            "id": "call_eg4aj51h",
+            "function": {
+              "index": 0,
+              "name": "run_sql",
+              "arguments": {
+                "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_TIMEZONE_SHIFT.GOLD.FCT_BARS WHERE bar_ts NOT BETWEEN '2023-04-01 13:30:00' AND '2023-04-01 19:59:00';"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "step": 3,
+        "tool": "run_sql",
+        "args": {
+          "sql": "SELECT COUNT(*) FROM MARKET_AGENT_CI_DOCTOR_TIMEZONE_SHIFT.GOLD.FCT_BARS WHERE bar_ts NOT BETWEEN '2023-04-01 13:30:00' AND '2023-04-01 19:59:00';"
+        },
+        "result": "{\"columns\": [\"COUNT(*)\"], \"rows\": [[\"1950\"]]}"
+      },
+      {
+        "step": 4,
+        "model": "",
+        "tool_calls": [
+          {
+            "id": "call_26mh46fk",
+            "function": {
+              "index": 0,
+              "name": "search_catalog",
+              "arguments": {
+                "keywords": "bars outside regular session"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "step": 4,
+        "tool": "search_catalog",
+        "args": {
+          "keywords": "bars outside regular session"
+        },
+        "result": "[{\"id\": \"L5\", \"title\": \"Extended hours mixed with the regular session\", \"symptom\": \"Pre- and after-hours distort volume and returns.\", \"solution\": \"ANALYST defaults to the regular session and says so; session is a semantic-model dimension.\"}, {\"id\": \"A2\", \"title\": \"\\u201cNo data\\u201d vs \\u201cbroken\\u201d\", \"symptom\": \"Weekends, holidays, half-days and pre-market look identical to an outage. Alerts fire every Saturday.\", \"solution\": \"WATCH checks /v2/calendar before raising anything. Suppresses alerts outside trading sessions and says so in the alert text.\"}, {\"id\": \"A9\", \"title\": \"Timezone and DST bugs\", \"symptom\": \"ET vs UTC confusion shifts the trading day; the DST weekend breaks \\u201ctoday\\u201d.\", \"solution\": \"DQ asserts that every session has 390 minute bars between 13:30/14:30 UTC and 20:00/21:00 UTC depending on DST.\"}, {\"id\": \"U1\", \"title\": \"Can't find the right table\", \"symptom\": \"RAW_BARS, SILVER.BARS, FCT_BARS and SYMBOLS_DT all look like 'the bars table'.\", \"solution\": \"CURATOR tags certified Gold objects and writes 'use this, not that' notes; ANALYST answers 'where is X' questions from them.\"}, {\"id\": \"P8\", \"title\": \"Week boundaries depend on session settings\", \"symptom\": \"WEEK_START and WEEK_OF_YEAR_POLICY change DATE_TRUNC('week') and WEEK(); two users get different weekly numbers.\", \"solution\": \"SQLCOACH flags session-dependent week functions; CURATOR adds one ISO-week column to DIM_DATE so the definition lives in one place.\"}]"
+      },
+      {
+        "step": 5,
+        "model": "",
+        "tool_calls": [
+          {
+            "id": "call_ry4jk9yb",
+            "function": {
+              "index": 0,
+              "name": "submit_diagnosis",
+              "arguments": {
+                "problem_id": "A9",
+                "root_cause": "Timezone and DST bugs caused the bar timestamps to be outside the regular session (UTC).",
+                "evidence": "1950 bars were found outside the regular session (UTC) between 13:30 and 19:59.",
+                "action": "escalate"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "scenario": "healthy_control",
+    "fault": "none (no fault)",
+    "detected": true,
+    "failing_checks": [],
+    "expected_action": null,
+    "action": null,
+    "action_correct": true,
+    "problem_id": "",
+    "id_accepted": true,
+    "fixed": null,
+    "decided_by": "checks",
+    "steps": 0,
+    "tool_calls": {},
+    "guardrail_blocks": 0,
+    "doctor_s": 2.1,
+    "total_s": 78.0,
+    "report_md": "## Pipeline doctor report: `MARKET_AGENT_CI_DOCTOR_HEALTHY_CONTROL`\n\n**Failing checks:**\n- none\n\n\n_0 model steps, tools {}, 0 guardrail blocks, 2.1 s, model qwen3:14b (local)._",
+    "transcript": []
+  }
+]

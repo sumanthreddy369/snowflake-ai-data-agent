@@ -55,6 +55,14 @@ SCENARIOS = [
 ]
 
 
+# Earlier runs, kept for comparison (raw results: analysis/doctor_eval_run_v1.json).
+HISTORY = [
+    "| v1 | first run: keyword search over the catalog | 2/5 | 5/5 | 4/4 | 1/1 | 55.4 s |",
+    "| v2 | hybrid search (local embeddings + IDF keywords); a diagnosis must cite an ID a search returned "
+    "| 5/5 | 5/5 | 4/4 | 1/1 | 102.3 s |",
+]
+
+
 def run_scenario(sc: dict) -> dict:
     db = f"MARKET_AGENT_CI_DOCTOR_{sc['name'].upper()}"
     os.environ["CI_DATABASE"] = db
@@ -120,7 +128,10 @@ def write_results(rows: list[dict]) -> None:
         lines.append(f"| {r['scenario']} | {r['fault']} | {r['expected_action'] or '-'} | {r['action'] or '-'}"
                      f" {'✅' if r['action_correct'] else '❌'} | {r['problem_id'] or '-'} | "
                      f"{'-' if r['fixed'] is None else ('yes' if r['fixed'] else 'NO')} | {r['steps']} | {r['doctor_s']} |")
-    lines += ["", "## Reports, as the on-call engineer receives them", ""]
+    lines += ["", "## Run history", "",
+              "| Run | Change | Diagnosis | Action | Fixed | Escalated | Median time |",
+              "|---|---|---|---|---|---|---|", *HISTORY,
+              "", "## Reports, as the on-call engineer receives them", ""]
     for r in rows:
         lines += [f"### {r['scenario']}", "", r["report_md"], ""]
     (REPO / "docs" / "doctor-eval-results.md").write_text("\n".join(lines), encoding="utf-8")

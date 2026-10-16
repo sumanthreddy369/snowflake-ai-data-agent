@@ -29,6 +29,7 @@ DBT_PROFILES_DIR with a `ci` target whose database is $CI_DATABASE.
 import argparse
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -48,6 +49,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("glue.doctor")
 
 MODEL = os.getenv("GLUE_LOCAL_MODEL", "qwen3:14b")
+EMBED_MODEL = os.getenv("GLUE_EMBED_MODEL", "nomic-embed-text")
+KEYWORD_WEIGHT = 0.3
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 CONNECTION = os.getenv("SNOWFLAKE_CONNECTION", "market_agent")
 REPO = Path(__file__).resolve().parent.parent
@@ -68,7 +71,9 @@ RUNBOOK = {
     "dedupe_silver_bars": {
         "when": "SILVER.BARS has repeated (symbol, bar_ts) rows, e.g. a connector replayed messages. "
                 "Keeps the most recently updated copy of each bar, then rebuilds Gold.",
-        "sql": ["CREATE OR REPLACE TABLE {db}.SILVER.BARS AS SELECT * FROM {db}.SILVER.BARS "
+        # INSERT OVERWRITE, not CREATE OR REPLACE: replacing the table would drop its
+        # grants (catalog E4).
+        "sql": ["INSERT OVERWRITE INTO {db}.SILVER.BARS SELECT * FROM {db}.SILVER.BARS "
                 "QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol, bar_ts ORDER BY _updated_at DESC) = 1"],
         "rebuild": True,
     },
@@ -100,10 +105,12 @@ Checks failed in the throwaway database {db}. Find the root cause and choose ONE
 How to work:
 1. Investigate with run_sql (read-only SELECT; only these tables: {tables}). Look at the actual
    rows behind each failing check. Keep queries small.
-2. Use search_catalog to find the matching known problem and its ID.
+2. Use search_catalog with words describing what you saw in the data (not the check's name) to
+   find the matching known problem. Cite only an ID that a search returned.
 3. Call submit_diagnosis exactly once, with the catalog problem ID, the root cause, the evidence
    you saw, and the action. Pick the least drastic action that fixes the cause.
 
+Base the root cause only on what your queries showed; if the data doesn't show why, say so.
 Facts: timestamps are UTC (TIMESTAMP_NTZ); the regular session is 13:30-19:59 UTC. One bar =
 one symbol per minute, so (symbol, bar_ts) must be unique. Gold.FCT_BARS is built from
 Silver.BARS and must have the same row count; FCT_BARS and FCT_TRADES must carry
@@ -168,13 +175,48 @@ def load_catalog() -> list[dict]:
     return [p for stage in data["stages"] for p in stage["problems"]]
 
 
-def search_catalog(problems: list[dict], keywords: str, top: int = 4) -> list[dict]:
-    words = {w for w in re.findall(r"[a-z0-9]+", keywords.lower()) if len(w) > 2}
-    def score(p):
-        text = f"{p['title']} {p['title']} {p['symptom']} {p['solution']}".lower()
-        return sum(text.count(w) for w in words)
-    ranked = sorted((p for p in problems if score(p) > 0), key=score, reverse=True)[:top]
-    return [{k: p[k] for k in ("id", "title", "symptom", "solution")} for p in ranked]
+class CatalogIndex:
+    """Hybrid search over the problem catalog: local embeddings (nomic-embed-text
+    on Ollama) plus IDF-weighted keywords. Found in the first evaluation: plain
+    keyword counting ranked "Trades don't match bars" above "Duplicates after a
+    connector restart" for "duplicate bars", because common words like "bars"
+    counted as much as rare ones, and the model then cited the wrong problem."""
+
+    def __init__(self, problems: list[dict]):
+        self.problems = problems
+        self.docs = [f"{p['title']}. {p['symptom']} {p['solution']}" for p in problems]
+        self.tokens = [_tokens(d) for d in self.docs]
+        df: dict[str, int] = {}
+        for toks in self.tokens:
+            for w in toks:
+                df[w] = df.get(w, 0) + 1
+        self.idf = {w: math.log(len(self.docs) / c) for w, c in df.items()}
+        self.vectors = _embed([f"search_document: {d}" for d in self.docs])
+
+    def search(self, query: str, top: int = 5) -> list[dict]:
+        q_vec = _embed([f"search_query: {query}"])[0]
+        q_tok = _tokens(query)
+        kw = [sum(self.idf.get(w, 0) for w in q_tok & toks) for toks in self.tokens]
+        kw_max = max(kw) or 1
+        scores = [sum(a * b for a, b in zip(q_vec, v)) + KEYWORD_WEIGHT * k / kw_max
+                  for v, k in zip(self.vectors, kw)]
+        best = sorted(range(len(scores)), key=lambda i: -scores[i])[:top]
+        return [{k: self.problems[i][k] for k in ("id", "title", "symptom", "solution")} for i in best]
+
+
+def _tokens(text: str) -> set[str]:
+    return {w.rstrip("s") for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) > 2}
+
+
+def _embed(texts: list[str]) -> list[list[float]]:
+    resp = httpx.post(f"{OLLAMA_URL}/api/embed", timeout=MODEL_TIMEOUT_S,
+                      json={"model": EMBED_MODEL, "input": texts})
+    resp.raise_for_status()
+    out = []
+    for v in resp.json()["embeddings"]:
+        n = math.sqrt(sum(x * x for x in v)) or 1.0
+        out.append([x / n for x in v])
+    return out
 
 
 def dbt_build(db: str) -> tuple[bool, str]:
@@ -197,7 +239,7 @@ class PipelineDoctor:
             raise ValueError("the doctor only works on throwaway MARKET_AGENT_CI_* databases")
         self.db = db
         self.conn = snowflake.connector.connect(connection_name=connection)
-        self.catalog = load_catalog()
+        self.catalog = CatalogIndex(load_catalog())
         self.allowed = frozenset(f"{db}.{s}.{t}" for s, t in (
             ("SILVER", "BARS"), ("SILVER", "TRADES"), ("SILVER", "SYMBOLS"), ("SILVER", "NEWS"),
             ("GOLD", "FCT_BARS"), ("GOLD", "FCT_TRADES"), ("GOLD", "DIM_SYMBOLS"), ("GOLD", "DIM_DATE")))
@@ -243,6 +285,7 @@ class PipelineDoctor:
             db=self.db, tables=", ".join(sorted(self.allowed)), runbook=runbook,
             failures="\n".join(f"- {f}" for f in failures), dbt=dbt_summary, schema=self._schema())},
             {"role": "user", "content": "Investigate and submit your diagnosis."}]
+        seen_ids: set[str] = set()
         for step in range(1, MAX_STEPS + 1):
             report.steps = step
             msg = self._chat(messages)
@@ -257,12 +300,24 @@ class PipelineDoctor:
                 name, args = call["function"]["name"], call["function"].get("arguments") or {}
                 report.tool_calls[name] = report.tool_calls.get(name, 0) + 1
                 if name == "submit_diagnosis":
-                    return Diagnosis(**{k: str(v) for k, v in args.items() if k in Diagnosis.model_fields})
+                    dx = Diagnosis(**{k: str(v) for k, v in args.items() if k in Diagnosis.model_fields})
+                    # Found in the first evaluation: the model cited a catalog ID that no
+                    # search had returned. A diagnosis must cite a problem it actually read.
+                    if dx.problem_id.strip() not in seen_ids and step < MAX_STEPS:
+                        report.guardrail_blocks += 1
+                        result = (f"Rejected: {dx.problem_id!r} was not in any search_catalog result. Search the "
+                                  f"catalog for the symptom you saw, then cite one of the IDs it returns.")
+                        report.transcript.append({"step": step, "tool": name, "args": args, "result": result})
+                        messages.append({"role": "tool", "content": result, "tool_name": name})
+                        continue
+                    return dx
                 if name == "run_sql":
                     result, blocked = self._run_sql(str(args.get("sql", "")))
                     report.guardrail_blocks += blocked
                 elif name == "search_catalog":
-                    result = json.dumps(search_catalog(self.catalog, str(args.get("keywords", ""))))
+                    hits = self.catalog.search(str(args.get("keywords", "")))
+                    seen_ids.update(h["id"] for h in hits)
+                    result = json.dumps(hits)
                 else:
                     result = f"Unknown tool {name}."
                 report.transcript.append({"step": step, "tool": name, "args": args, "result": result[:1500]})

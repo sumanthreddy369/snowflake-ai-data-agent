@@ -2,7 +2,7 @@
 
 import pytest
 
-from glue.doctor import RUNBOOK, TOOLS, PipelineDoctor, load_catalog, search_catalog
+from glue.doctor import RUNBOOK, TOOLS, PipelineDoctor, load_catalog
 from glue.guardrails import GuardrailViolation, check_sql
 
 CLONE = "MARKET_AGENT_CI_TEST"
@@ -48,7 +48,5 @@ def test_doctor_sql_allows_clone_reads_with_cap():
     assert checked.sql.endswith("LIMIT 20")
 
 
-def test_catalog_search_finds_known_problems():
-    catalog = load_catalog()
-    assert len(catalog) == 158
-    assert "A9" in [p["id"] for p in search_catalog(catalog, "timezone shifted outside session")]
+def test_catalog_has_every_problem():
+    assert len(load_catalog()) == 158
