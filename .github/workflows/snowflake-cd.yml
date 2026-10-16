@@ -1,0 +1,78 @@
+# Snowflake CD: after a change to the data model reaches master, deploy it to
+# the real MARKET_AGENT database -- but only once a human approves. The job runs
+# in the GitHub "production" environment, which must be configured with a
+# required reviewer (Settings -> Environments -> production).
+#
+# What it deploys: the dbt models (Gold), as role TRANSFORMER, then verifies the
+# delay policy is still attached and Silver/Gold reconcile. Changes to roles,
+# policies and other account-level objects in sql/ are applied by an admin,
+# not by this pipeline (least privilege for the deploy identity).
+name: snowflake-cd
+
+on:
+  push:
+    branches: [master]
+    paths: ["dbt/**", "cicd/**", ".github/workflows/snowflake-cd.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: snowflake-cd
+  cancel-in-progress: false
+
+env:
+  SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+  SNOWFLAKE_USER: CI_DEPLOY
+  SNOWFLAKE_ROLE: TRANSFORMER
+  SNOWFLAKE_WAREHOUSE: COMPUTE_WH
+  SNOWFLAKE_PRIVATE_KEY_PATH: ${{ github.workspace }}/.ci_key.p8
+  DBT_PROFILES_DIR: ${{ github.workspace }}/.ci_dbt_profiles
+
+jobs:
+  deploy-to-production:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dbt and the Snowflake connector
+        run: pip install dbt-snowflake snowflake-connector-python
+
+      - name: Write key and dbt profile (key-pair auth, no passwords)
+        env:
+          KEY: ${{ secrets.SNOWFLAKE_CI_PRIVATE_KEY }}
+        run: |
+          printf '%s\n' "$KEY" > "$SNOWFLAKE_PRIVATE_KEY_PATH"
+          chmod 600 "$SNOWFLAKE_PRIVATE_KEY_PATH"
+          mkdir -p "$DBT_PROFILES_DIR"
+          cat > "$DBT_PROFILES_DIR/profiles.yml" <<EOF
+          retail_agent_gold:
+            target: prod
+            outputs:
+              prod:
+                type: snowflake
+                account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+                user: CI_DEPLOY
+                private_key_path: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PATH') }}"
+                role: TRANSFORMER
+                database: MARKET_AGENT
+                warehouse: COMPUTE_WH
+                schema: GOLD
+                threads: 4
+          EOF
+
+      - name: "1. dbt build on MARKET_AGENT (production)"
+        working-directory: dbt
+        run: |
+          dbt build --target prod
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          r = json.load(open("target/run_results.json"))["results"]
+          ok = sum(x["status"] in ("success", "pass") for x in r)
+          print(f"### 1. dbt build on production\n\n**{ok}/{len(r)} models and tests passed.**\n")
+          PY
+
+      - name: "2. Post-deploy verification (policy attached, counts reconcile)"
+        run: python cicd/snowflake_ci.py verify

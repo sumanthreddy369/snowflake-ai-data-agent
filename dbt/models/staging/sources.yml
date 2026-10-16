@@ -2,7 +2,9 @@ version: 2
 
 sources:
   - name: silver
-    database: MARKET_AGENT
+    # Follows the target, so a CI build reads its own cloned Silver instead of
+    # production (was hardcoded to MARKET_AGENT).
+    database: "{{ target.database }}"
     schema: SILVER
     tables:
       - name: trades

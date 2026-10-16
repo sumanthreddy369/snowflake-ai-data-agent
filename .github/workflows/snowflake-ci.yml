@@ -1,0 +1,84 @@
+# Snowflake CI: every pull request that touches the data model is built and
+# tested against real data in a throwaway, zero-copy-cloned database -- never
+# against production. The database is dropped at the end even if a step fails.
+#
+# Secrets: SNOWFLAKE_ACCOUNT, SNOWFLAKE_CI_PRIVATE_KEY (CI_DEPLOY's key; see
+# sql/12_cicd/ci_deploy_user.sql and docs/cicd.md).
+name: snowflake-ci
+
+on:
+  pull_request:
+    paths: ["dbt/**", "sql/**", "cicd/**", ".github/workflows/snowflake-*.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: snowflake-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI_DATABASE: MARKET_AGENT_CI_${{ github.run_id }}
+  SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+  SNOWFLAKE_USER: CI_DEPLOY
+  SNOWFLAKE_ROLE: CI_RUNNER
+  SNOWFLAKE_WAREHOUSE: COMPUTE_WH
+  SNOWFLAKE_PRIVATE_KEY_PATH: ${{ github.workspace }}/.ci_key.p8
+  DBT_PROFILES_DIR: ${{ github.workspace }}/.ci_dbt_profiles
+
+jobs:
+  build-and-test-in-clone:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dbt and the Snowflake connector
+        run: pip install dbt-snowflake snowflake-connector-python
+
+      - name: Write key and dbt profile (key-pair auth, no passwords)
+        env:
+          KEY: ${{ secrets.SNOWFLAKE_CI_PRIVATE_KEY }}
+        run: |
+          printf '%s\n' "$KEY" > "$SNOWFLAKE_PRIVATE_KEY_PATH"
+          chmod 600 "$SNOWFLAKE_PRIVATE_KEY_PATH"
+          mkdir -p "$DBT_PROFILES_DIR"
+          cat > "$DBT_PROFILES_DIR/profiles.yml" <<EOF
+          retail_agent_gold:
+            target: ci
+            outputs:
+              ci:
+                type: snowflake
+                account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+                user: CI_DEPLOY
+                private_key_path: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PATH') }}"
+                role: CI_RUNNER
+                database: "{{ env_var('CI_DATABASE') }}"
+                warehouse: COMPUTE_WH
+                schema: GOLD
+                threads: 4
+          EOF
+
+      - name: "1. Zero-copy clone Silver into a throwaway database"
+        run: python cicd/snowflake_ci.py clone
+
+      - name: "2. dbt build (models + tests) inside the clone"
+        working-directory: dbt
+        run: |
+          dbt build --target ci
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          r = json.load(open("target/run_results.json"))["results"]
+          ok = sum(x["status"] in ("success", "pass") for x in r)
+          print(f"### 2. dbt build in the clone\n\n**{ok}/{len(r)} models and tests passed.**\n")
+          print("| Node | Status | Time (s) |\n|---|---|---|")
+          for x in r:
+              print(f"| {x['unique_id'].split('.')[-1]} | {x['status']} | {x['execution_time']:.1f} |")
+          PY
+
+      - name: "3. Governance and data checks"
+        run: python cicd/snowflake_ci.py checks
+
+      - name: "4. Drop the throwaway database"
+        if: always()
+        run: python cicd/snowflake_ci.py drop
