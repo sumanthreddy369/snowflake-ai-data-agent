@@ -83,14 +83,14 @@ def arch_diagram() -> Drawing:
     bands = [
         (0.82, "Wired and watched by:  Dagster · Terraform · GitHub Actions · Snowflake alerts · "
                "OpenTelemetry → Prometheus + Grafana + Jaeger", SNOW),
-        (0.42, "Planned:  3 glue agents on Claude via Vertex AI Model Garden, behind one guardrail gateway "
-               "(risk tiers · approvals · budgets · audit)", OURS),
+        (0.42, "Our glue + guardrails:  analyst agent and pipeline doctor on a local model (Ollama) · SQL guardrail · "
+               "runbook-only fixes · CI on zero-copy clones · approval-gated deploy · audit", OURS),
     ]
     for yb, text, fill in bands:
         y = yb * inch
         d.add(Rect(x0, y, 5 * bw + 4 * gap, 0.3 * inch, rx=4, ry=4, fillColor=fill, strokeColor=ACCENT, strokeWidth=0.6))
         d.add(String(x0 + 8, y + 7.5, text, fontName="Body", fontSize=7, fillColor=INK))
-    d.add(String(x0, 0.12 * inch, "Grey = outside Snowflake · Blue = inside Snowflake / existing tools · Purple = our planned glue + guardrails",
+    d.add(String(x0, 0.12 * inch, "Grey = outside Snowflake · Blue = inside Snowflake / existing tools · Purple = our glue + guardrails",
                  fontName="Body-Italic", fontSize=6.8, fillColor=MUTED))
     return d
 
@@ -168,11 +168,10 @@ def content() -> list:
         "<b>guardrails</b> (what keeps them and the AI safe). The goal is to remove repetitive human work while keeping human "
         "approval for anything that changes money, access or production."))
     st.append(note(
-        "<b>Status (14 Oct 2026):</b> verified locally — sample-data generators, DLQ routing, ONNX anomaly model, "
-        "<i>dbt parse</i>, Dagster graph validation, <i>terraform validate</i>, and the local Kafka + observability stack "
-        "(metrics, alerts and dashboard checked with replayed data); CI passes on GitHub. A Snowflake trial "
-        "account exists and is being connected (key-pair auth set up). <b>No SQL has run against live Snowflake yet</b>; the "
-        "glue agents and guardrail gateway are planned, not built."))
+        "<b>What has run:</b> Bronze → Silver → Gold on a Snowflake trial account (dbt 19/19, 9,795 rows reconciled), "
+        "the 15-minute delay policy tested across 12 role and timezone combinations, the local Kafka + observability "
+        "stack, the analyst agent (13/15 on its eval, 8/8 attacks blocked) and the pipeline doctor, both on a local "
+        "model. Results and screenshots: docs/snowflake-results.md, docs/stack-results.md, docs/project-summary.md."))
     st.append(Spacer(1, 6))
     st.append(diagram())
 
@@ -279,20 +278,19 @@ def content() -> list:
         ("J2", "Pause: suspend tasks, alerts and pipes; drop Cortex Search (costs credits while it exists). Remove: drop the "
                "database and integrations; terraform destroy.", "SQL + Terraform", "sql/99_teardown/stop_spend.sql (levels 1–2)"),
     ])
-    st += stage("K. Planned: glue agents behind a guardrail gateway", [
-        ("K1", "Analyst glue: asks the Cortex Agent, checks the answer came from executed SQL, returns it with as-of time and "
-               "citations, or escalates.", "Claude on Vertex AI", "docs/glue-and-guardrails.md"),
-        ("K2", "Incident glue: on an alert, checks systems in order, names the first broken link with evidence, proposes the "
-               "runbook step.", "Claude on Vertex AI + MCP", "docs/glue-and-guardrails.md"),
-        ("K3", "Change glue: drafts the dbt model and tests, opens a PR with a stage report, deploys after approval.",
-         "Claude on Vertex AI + dbt/GitHub MCP", "docs/modeling-agents-study.md"),
-        ("K4", "Gateway on every tool call: read/draft automatic; reversible prod change = 1 approval; irreversible, access or "
-               "money = approval + reviewed plan; secrets, weakening checks, widening access blocked; budgets; audit.",
-         "Python (planned)", "docs/glue-and-guardrails.md §4"),
-        ("K5", "Model access: Claude through Vertex AI Model Garden in our GCP project (billing, IAM and audit in one cloud). "
-               "Off by default; enabling the model in Model Garden is a human step. Analysts' questions stay on Snowflake "
-               "Cortex so governed data never leaves Snowflake.", "Vertex AI + Anthropic SDK",
-         "glue/llm.py, infra/terraform/vertex.tf"),
+    st += stage("K. Glue agents and guardrails (local model)", [
+        ("K1", "Analyst agent: plain-English question → one SQL query from the local model → AST guardrail (read-only, "
+               "Gold tables only, row cap) → runs as ANALYST_AGENT under the delay policy → audit row.",
+         "Ollama qwen3:14b · sqlglot", "glue/analyst.py, glue/guardrails.py"),
+        ("K2", "Pipeline doctor: on a failed check, investigates with read-only SQL, finds the matching catalog problem "
+               "(hybrid search), picks one human-written runbook action, applies it in a throwaway clone, re-runs dbt and "
+               "the checks, and proposes the production fix for approval, or escalates.",
+         "Ollama qwen3:14b + nomic-embed-text", "glue/doctor.py"),
+        ("K3", "Snowflake CI: each pull request is built and tested in a zero-copy clone of Silver, then the clone is "
+               "dropped. CD: merges deploy to MARKET_AGENT only after a human approves, then re-run the checks.",
+         "GitHub Actions · dbt", ".github/workflows/snowflake-ci.yml, snowflake-cd.yml"),
+        ("K4", "Why local: no data, schema or error text leaves for a model vendor; cost $0 per call.",
+         "RTX 5070 Ti, 12 GB", "docs/glue-and-guardrails.md"),
     ])
 
     # ----------------------------------------------------------------- freshness
@@ -366,8 +364,10 @@ def content() -> list:
         ("CI/CD", "GitHub Actions", "service", "CI every push; approval-gated deploy", ".github/workflows/"),
         ("Docs", "reportlab · python-docx · pypdfium2 · PyYAML", "5.0.1 · 1.2.0 · 5.13.0 · 6.0.2",
          "These PDF and Word documents; the catalog", "docs/, knowledge/"),
-        ("Models (glue agents)", "Claude on Vertex AI Model Garden · Anthropic SDK [vertex]", "service · 1.13.0",
-         "Glue agents behind the guardrail gateway (off by default)", "glue/llm.py, infra/terraform/vertex.tf"),
+        ("Models (glue agents)", "Ollama · qwen3:14b · nomic-embed-text", "local",
+         "Analyst agent and pipeline doctor; nothing sent to a model vendor", "glue/"),
+        ("SQL guardrail", "sqlglot", "—", "Parses model-written SQL; read-only, allow-listed tables, row cap",
+         "glue/guardrails.py"),
     ], [0.95, 1.85, 1.35, 1.75, 1.6]))
 
     # ----------------------------------------------------------------- roles
@@ -393,27 +393,23 @@ def content() -> list:
             "Grant real-time entitlement (REALTIME_DESK).",
             "Approve new metric definitions in the semantic layer.",
             "Respond to SEV-1 pages — pausing the agent is the safe default.",
-            "Planned gateway: approve reversible production actions; approve + review irreversible ones.",
+            "Approve the pipeline doctor's proposed production fix; take over anything it escalates.",
         ]),
     ]))
 
     # ----------------------------------------------------------------- status + run
     st.append(PageBreak())
-    st.append(P("What's verified, written, and planned", "h1"))
+    st.append(P("What has been verified", "h1"))
     st.append(grid(["Component", "Status"], [
-        ("Sample data generators, DLQ routing, ONNX model training", "Verified locally (run against sample data)"),
-        ("CI pipeline", "Passing on GitHub"),
-        ("dbt project", "dbt parse passes; not run against Snowflake"),
-        ("Dagster asset graph and schedules", "dagster definitions validate passes; not run against Snowflake"),
-        ("Terraform", "terraform validate passes against real providers; not applied"),
-        ("All SQL (Bronze → Agent, governance, alerts, stop-spend)", "Written; not yet run on the live trial"),
-        ("Snowflake trial account + key-pair connection", "Account active; key registration in progress"),
+        ("Bronze → Silver → Gold on Snowflake", "dbt 19/19 pass; 9,795 rows reconciled across layers; 6 defects found and fixed"),
+        ("15-minute delay policy", "Tested across 12 role × secondary-role × timezone combinations; a leak found and fixed"),
         ("Local Kafka + observability stack (OTel, Prometheus, Grafana, Jaeger)",
-         "Verified locally: replayed data reached Prometheus and matched Kafka offsets; alerts and dashboard load"),
-        ("Vertex AI wiring", "Client builds and terraform validates; no model call made (needs Model Garden enablement + budget)"),
-        ("Approval-gated deploy workflow", "Written; not run"),
-        ("Glue agents + guardrail gateway", "Planned (docs/glue-and-guardrails.md)"),
-        ("pytest suite", "Not built yet"),
+         "Replayed data reached Prometheus and matched Kafka offsets exactly; 4 alert rules load; dashboard renders"),
+        ("Analyst agent (local model)", "13/15 reference questions, 8/8 attacks blocked, 0 unsafe executions"),
+        ("Pipeline doctor (local model)", "5/5 injected faults diagnosed: 4 fixed and verified in a clone, 1 escalated; 0 production writes"),
+        ("Snowflake CI steps", "Clone 12 s, dbt 19/19 and 8/8 checks in the clone, clone dropped"),
+        ("pytest", "36 unit tests (SQL guardrail, doctor safety rules), run in CI"),
+        ("CI on GitHub", "Passing: compile, generators, catalog + docs build, dbt parse, Dagster graph, Terraform, pytest"),
     ], [3.8, 3.7]))
 
     st.append(P("How to run it", "h1"))
@@ -429,7 +425,8 @@ def content() -> list:
         ("Build Gold by hand", "cd dbt && dbt build"),
         ("Ask the agent", "python agent/cortex_agent_client.py \"What's happening with AAPL today?\""),
         ("Chat UI / API", "cd ui && streamlit run streamlit_app.py · cd api && uvicorn main:app"),
-        ("Check Vertex AI wiring (no cost)", "python -m glue.llm --check"),
+        ("Ask the analyst agent", "python -m glue.analyst \"Which stock had the highest volume?\""),
+        ("Run the pipeline doctor evaluation", "python -m glue.eval_doctor"),
         ("Cap / pause spend", "Run sql/99_teardown/stop_spend.sql (levels 0–1) in Snowsight"),
         ("Rebuild these PDFs", "python docs/build_workflow_doc.py · python docs/build_playbook.py"),
     ], [2.0, 5.5]))

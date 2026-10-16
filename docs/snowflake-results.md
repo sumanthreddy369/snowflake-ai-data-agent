@@ -142,9 +142,8 @@ created, but its tools (Cortex Analyst text-to-SQL and Cortex Search) can't
 run on this account. The governed layer they depend on — the semantic view,
 the row access policy and the agent role — is in place and tested.
 
-Options for the agent part without a paid Snowflake account: the glue agent on
-Claude via Vertex AI (`glue/llm.py`, paid through GCP) or a free local model
-with Ollama, both querying the same semantic view as `ANALYST_AGENT`.
+The agent part therefore runs on a free local model with Ollama, querying the
+same governed Gold tables as `ANALYST_AGENT` (§8).
 
 ---
 

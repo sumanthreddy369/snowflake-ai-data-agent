@@ -23,7 +23,7 @@ models in `schemas.py`.
 **`mcp_server.py`** exposes both clients, plus a direct guardrail-monitoring
 query (`get_flagged_anomalies`), as MCP tools via [FastMCP](https://gofastmcp.com/) —
 the "Agent interoperability" piece of the architecture, so any MCP-aware
-client (including Claude) can call this project's governed data access as a
+client can call this project's governed data access as a
 tool. This is a standalone MCP server, not Snowflake's own managed MCP server
 (a Native Apps feature that would require packaging this project as a
 Snowflake Native App) — a simpler, independently runnable substitute that

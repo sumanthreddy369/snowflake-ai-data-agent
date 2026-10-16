@@ -42,9 +42,6 @@ jobs:
       - name: Unit tests (guardrails; no Snowflake or model needed)
         run: python -m pytest tests/ -q
 
-      - name: Vertex AI client wiring (builds the client, sends no request)
-        run: GCP_PROJECT=ci-placeholder python -m glue.llm --check
-
       - name: Local observability stack config is valid
         run: docker compose -f infra/local/docker-compose.yml config -q
 

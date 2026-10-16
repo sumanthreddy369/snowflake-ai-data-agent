@@ -1,8 +1,8 @@
 """
 Guardrails for SQL written by an LLM, checked before anything reaches Snowflake.
 
-This is the deterministic half of the guardrail gateway
-(docs/glue-and-guardrails.md §4): the model can propose any text, but only a
+This is the deterministic half of the agents' guardrails
+(docs/glue-and-guardrails.md §2): the model can propose any text, but only a
 single, read-only query over allow-listed Gold objects is ever executed, and
 always with a row cap. The database adds the second layer -- the query runs as
 ANALYST_AGENT under the row access policy and a statement timeout -- so a

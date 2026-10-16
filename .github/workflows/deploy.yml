@@ -4,7 +4,8 @@
 # environment (Settings -> Environments) with required reviewers, so a human
 # reads the Terraform plan and approves before anything changes.
 #
-# Not yet run. Required secrets:
+# Infrastructure deploy (Terraform + Dagster). The data-model deploy is
+# snowflake-cd.yml. Required secrets:
 #   SNOWFLAKE_ORGANIZATION_NAME, SNOWFLAKE_ACCOUNT_NAME  -- Terraform provider
 #   SNOWFLAKE_ACCOUNT        -- account identifier for the Python connector
 #   SNOWFLAKE_USER, SNOWFLAKE_PRIVATE_KEY (Terraform, key-pair)

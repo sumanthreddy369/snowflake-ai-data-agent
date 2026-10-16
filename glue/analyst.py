@@ -5,7 +5,6 @@ The flow is the plan in docs/glue-and-guardrails.md, built with existing pieces:
   1. A local model (Ollama, default qwen3:14b) proposes one SQL query over the
      Gold star schema. Local because Snowflake Cortex isn't available on trial
      accounts, and because it costs nothing and keeps data on this machine.
-     The same code path can use Claude on Vertex AI later (glue/llm.py).
   2. glue/guardrails.py checks it: one read-only statement, Gold tables only,
      row cap. Anything else is refused before it reaches Snowflake.
   3. Snowflake runs it as ANALYST_AGENT with secondary roles off, on the

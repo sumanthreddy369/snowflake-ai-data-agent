@@ -86,11 +86,11 @@ failed request rather than hidden. Each request produced a trace in Jaeger:
 | CI on GitHub (compile, generators, catalog + docs build, dbt parse, Dagster graph, Terraform) | Passing |
 | `terraform validate` against real providers (Snowflake 2.21.0, Google 7.46.1) | Valid, no warnings |
 | `dagster definitions validate` | Valid; deploy order derived correctly (Bronze → … → Cortex Agent) |
-| Vertex AI client wiring (`python -m glue.llm --check`) | Client builds; refuses model calls unless explicitly enabled; no call made |
 | Sample data generators, DLQ routing, ONNX anomaly model | Verified earlier against sample data |
 
-## 5. Not yet run
+## 5. Snowflake
 
-All SQL against the live Snowflake trial, dbt against Snowflake, the Cortex
-Agent, Snowflake alerts, `terraform apply`, the deploy workflow, and any
-Vertex AI model call.
+The Snowflake side (Bronze → Silver → Gold, governance, dbt) ran on a trial
+account afterwards; results and screenshots are in
+[snowflake-results.md](snowflake-results.md).
+

@@ -8,8 +8,8 @@
 #
 # Fields per problem: id, title, symptom, who, agents (first = owner),
 # solution, guardrail, optional bad_sql/good_sql. Validated by the Pydantic
-# models in docs/build_playbook.py. This is a plan: none of these agents exist
-# yet.
+# models in docs/build_playbook.py. ANALYST is glue/analyst.py and DOCTOR is
+# glue/doctor.py; the other roles are covered by existing tools and checks.
 
 agents:
 - code: WATCH

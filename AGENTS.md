@@ -9,10 +9,9 @@ minute bars, and financial news, transforms them into a governed star schema
 and a document search index, and exposes both to an AI agent through five
 entry points (direct Cortex Analyst, a multi-tool Cortex Agent, an MCP
 server, a Streamlit UI, a FastAPI service). See [README.md](README.md) for
-the full architecture and [docs/PORTFOLIO_BRIEF.md](docs/PORTFOLIO_BRIEF.md)
-for the reasoning history behind design decisions. Nothing in this repo has
-been run against a live Snowflake account yet — treat every SQL file as
-unverified against real infrastructure until told otherwise.
+the full architecture, [docs/snowflake-results.md](docs/snowflake-results.md)
+for what the live Snowflake run verified, and
+[docs/project-summary.md](docs/project-summary.md) for the measured results.
 
 ## Structure map
 

@@ -9,16 +9,20 @@ entry point is subject to the same Row Access Policy, so the agent can never
 see a real-time price it isn't licensed to show, and every answer it gives
 has either a hand-written SQL check or a source citation behind it.
 
-**Status: in development.** All SQL, dbt, and Python in this repo is written
-and locally verified where that's possible without an account (see
-[Feature status](#feature-status)), but none of it has been run against a
-live Kafka broker connected to Snowflake, GCS bucket, or Alpaca connection yet; the Snowflake layers have now run on a trial account (see below).
+**What has run:** the Snowflake layers end to end on a trial account (dbt 19/19, 9,795 rows
+reconciled, six defects found and fixed), the 15-minute delay policy across 12 role and
+timezone combinations, the local Kafka + observability stack, and two agents on a local
+model: an analyst agent (13/15 on its eval, 8/8 attacks blocked) and a pipeline doctor that
+diagnoses and fixes failed checks (5/5 injected faults diagnosed correctly: 4 fixed and verified in a clone, 1 escalated to a human, no false alarm, 0 production writes). No data, schema or error text is sent to
+a model vendor: both agents run on the laptop's GPU.
 
 **Project summary with verifiable numbers:** [docs/project-summary.md](docs/project-summary.md)
 
 **Results so far, with screenshots:**
 - [docs/snowflake-results.md](docs/snowflake-results.md) — the pipeline run on Snowflake: Bronze → Silver → Gold, EDA in Snowsight, the 15-minute delay policy tested, and six bugs the live run found and fixed.
 - [docs/stack-results.md](docs/stack-results.md) — the local Kafka + observability stack run end to end, including a validation bug it caught.
+- [docs/agent-eval-results.md](docs/agent-eval-results.md) — the analyst agent's evaluation, four runs from 53% to 87%.
+- [docs/doctor-eval-results.md](docs/doctor-eval-results.md) — the pipeline doctor on five injected faults and a healthy control.
 
 ---
 
@@ -65,7 +69,7 @@ snowflake-ai-data-agent/
 │   ├── cortex_agent_client.py          # Cortex Agent REST call (routes analyst vs. search)
 │   └── mcp_server.py                   # FastMCP server: 3 tools wrapping the two clients above
 ├── snowpark/
-│   └── train_anomaly_model.py          # IsolationForest -> ONNX; Model Registry registration documented, not run
+│   └── train_anomaly_model.py          # IsolationForest -> ONNX
 ├── ui/
 │   └── streamlit_app.py                # chat UI over cortex_agent_client.ask_market_data_agent
 ├── api/
@@ -84,32 +88,38 @@ snowflake-ai-data-agent/
 │   ├── assets.py                       # one asset per SQL file / dbt model / backfill step
 │   ├── checks.py                       # policy attached, freshness, reconciliation, task health
 │   └── definitions.py                  # jobs and schedules
-├── infra/terraform/                    # GCS + Pub/Sub + IAM, Snowflake database/warehouse/roles/integrations, Vertex AI
+├── infra/terraform/                    # GCS + Pub/Sub + IAM, Snowflake database/warehouse/roles/integrations
 ├── infra/local/                        # docker compose: Kafka + OTel Collector, Prometheus (alerts), Grafana, Jaeger
 ├── glue/                               # glue agents and guardrails
 │   ├── analyst.py                      # question -> local LLM -> guarded SQL -> governed answer + audit row
 │   ├── guardrails.py                   # AST-based SQL checks (tests/test_guardrails.py)
 │   ├── eval_analyst.py, eval_questions.yaml  # 15 reference questions + 8 attack prompts
-│   └── llm.py                          # Claude on Vertex AI Model Garden (off by default)
+│   ├── doctor.py                       # failed check -> investigate -> diagnose -> runbook fix in a clone -> verify
+│   └── eval_doctor.py                  # injects 5 catalog faults into zero-copy clones and scores the doctor
+├── cicd/
+│   ├── snowflake_ci.py                 # clone / checks / drop / verify steps for the Snowflake workflows
+│   └── bootstrap_ci.py                 # one-time admin setup: CI_DEPLOY user, GitHub secrets, approval environment
 ├── analysis/                           # eda.sql, eda_charts.py, load + eval outputs
 ├── tests/                              # pytest suite (runs in CI)
-├── .github/workflows/                  # ci.yml (every push), deploy.yml (manual, approval-gated)
+├── .github/workflows/                  # ci.yml (every push), snowflake-ci.yml (PRs, zero-copy clone), snowflake-cd.yml (approval-gated deploy)
 ├── knowledge/
 │   └── problem_catalog.yaml            # agent knowledge: every problem, owning agent, fix, guardrail, bad/good SQL; source of the PDF
 ├── requirements.txt                    # single flat file for the whole repo's Python deps
 └── docs/
-    ├── PORTFOLIO_BRIEF.md              # reasoning history behind domain/architecture decisions
     ├── agent-and-governance-flow.md    # deep dive on the flow with the most entry points
     ├── restructure-proposal.md         # suggested layout changes -- proposals only, not applied
-    ├── snowflake-e2e-agent-playbook.pdf  # 158 problems, the agent for each, how agents are trained (plan, not built)
+    ├── snowflake-e2e-agent-playbook.pdf  # 158 problems, the agent role for each, fix and guardrail
     ├── build_playbook.py               # validates knowledge/problem_catalog.yaml and renders it to the PDF
     ├── stack-results.md                # what has actually run, with screenshots (docs/screenshots/)
     ├── workflow-and-tech-stack.pdf/.docx  # end-to-end workflow + full tech stack with versions
     ├── build_workflow_doc.py           # renders both from one source
-    ├── glue-and-guardrails.md          # PLAN OF RECORD: 3 glue agents + guardrail gateway over existing tools
+    ├── glue-and-guardrails.md          # the agents and guardrails: what each one may do, and the results
     ├── production-readiness.md         # existing tools vs the glue and guardrails we write; human work removed
     ├── runbook.md                      # on-call: severities, one entry per alert
-    └── modeling-agents-study.md        # stage-gated build with reports, around existing tools
+    ├── project-summary.md              # resume-style summary; every number links to its evidence
+    ├── snowflake-results.md            # the live Snowflake run, EDA, bugs found, governance tests
+    ├── agent-eval-results.md           # analyst agent evaluation
+    └── doctor-eval-results.md          # pipeline doctor evaluation
 ```
 
 ---
@@ -153,7 +163,7 @@ The producer and the offline replay script are interchangeable inputs to the sam
 
 **Reconnection**: `alpaca_stream_producer.run` is wrapped in `@retry(retry_if_exception_type(ConnectionClosed), wait_exponential(...), stop_after_attempt(10))` — a dropped websocket retries with exponential backoff up to 10 times rather than exiting.
 
-**Status: Partial.** The code is complete and the offline path was run locally (see Feature status), but the live path has not been connected to a real Alpaca feed or a real Kafka broker.
+**What ran:** the offline path end to end, replayed through Kafka with metrics matching Kafka's own offsets exactly ([docs/stack-results.md](docs/stack-results.md)); the sample data was loaded into Bronze with PUT + COPY. The live Alpaca feed needs an Alpaca API key and is not part of the results.
 
 ---
 
@@ -193,7 +203,7 @@ flowchart LR
 
 *Upload is manual*: neither script uploads to GCS itself — both print a reminder that the operator uploads the CSV to trigger the pipe's `AUTO_INGEST`. There is no code path that does this automatically.
 
-**Status: Stubbed.** Both scripts run and produce correctly-shaped output against Alpaca's real API (not verified in this session — no Alpaca key available), but the GCS upload step and the pipe auto-ingest have not been exercised end-to-end.
+**What ran:** this flow is not part of the results; it needs an Alpaca API key and a GCS bucket.
 
 ---
 
@@ -240,7 +250,7 @@ Each Task dedupes by taking the latest row per natural key (`QUALIFY ROW_NUMBER(
 
 *Dynamic Table alternative*: `sql/03_silver/dynamic_tables_alternative.sql` reimplements `SILVER.SYMBOLS` as a `CREATE DYNAMIC TABLE` with `TARGET_LAG = '15 minutes'`. This is **not** referenced by `dbt/models/staging/sources.yml` (which still points at `SILVER.SYMBOLS`, the Stream+Task version) — it exists to show the pattern side by side, not as a replacement in the active pipeline.
 
-**Status: Stubbed.** SQL is written and internally consistent; dbt's built-in `unique`/`not_null`/`relationships` tests (`dbt/models/marts/schema.yml`) and the singular `assert_bar_ohlc_consistency` test cover the Gold schema, but nothing here has run against a live warehouse.
+**What ran:** all of it, on a Snowflake trial account. Tasks merged Bronze into Silver exactly, `dbt build` passed 19/19 and 9,795 rows reconciled across layers. The first live run found six defects, all fixed ([docs/snowflake-results.md](docs/snowflake-results.md)).
 
 ---
 
@@ -270,7 +280,7 @@ This branch deliberately mirrors the structured branch's own Bronze/Silver shape
 
 *Freshness*: `TARGET_LAG = '1 hour'` — news doesn't need the same freshness as prices, so the search index is allowed to lag Silver by up to an hour.
 
-**Status: Stubbed.** `generate_sample_news.py` was run locally and produces schema-valid sample data (see Feature status); the Cortex Search Service DDL is written to current documented syntax but has not been created against a live account.
+**What ran:** news rows loaded into Bronze and merged into Silver on Snowflake. The Cortex Search Service can't be created on a trial account, because embedding functions are blocked there.
 
 ---
 
@@ -314,7 +324,7 @@ flowchart TD
 
 **Governance is enforced once, below every entry point.** All five entry points and both agent tools resolve to queries that run as the `ANALYST_AGENT` role, so the Row Access Policy applies identically regardless of how the question arrived — there is no separate access-control logic in the UI, the API, or the MCP server.
 
-**Status: Stubbed.** All five clients compile and import cleanly; none has been run against a live Cortex Analyst, Cortex Agent, or Snowflake account.
+**What ran:** the semantic view, the row access policy and the agent role, created and tested on Snowflake. Trial accounts block Cortex Analyst and Cortex Agents, so the measured agent is the guardrailed analyst agent on a local model (flow 7).
 
 ---
 
@@ -338,11 +348,9 @@ flowchart TD
         Register["register_to_snowflake<br/>(documented, raises<br/>NotImplementedError)"]
     end
     Onnx["anomaly_model.onnx<br/>(local file, gitignored)"]
-    Registry["Snowflake Model Registry<br/>(target, not built yet)"]
-    SQLCall["BAR_ANOMALY_DETECTOR!PREDICT(...)<br/>(target, not built yet)"]
 
     Load --> Train --> Export --> Onnx
-    Onnx -.-> Register -.-> Registry -.-> SQLCall
+    Onnx -.-> Register
 ```
 
 The fixed 10% threshold and the learned model are not wired together: `is_suspect` in `fct_bars.sql` is still the hard-coded rule. `train_anomaly_model.py` is a separate, standalone script that demonstrates the intended replacement but does not modify `fct_bars.sql` or call the Model Registry automatically.
@@ -350,21 +358,48 @@ The fixed 10% threshold and the learned model are not wired together: `is_suspec
 **Why flag instead of filter**: a genuine 10%+ move (earnings, an acquisition rumor) and a bad tick produce the same signal to a naive threshold. Flagging both and routing them to a monitoring query keeps a human in the loop instead of guessing which case it is.
 
 **Status**:
-- Fixed threshold in `fct_bars.is_suspect`: **Stubbed** (written, unexecuted against live data).
+- Fixed threshold in `fct_bars.is_suspect`: runs in the live dbt build on Snowflake.
 - `train_anomaly_model.py` training + ONNX export: **Complete** — run locally against `streaming/data/sample_bars.csv`, trained on 1,950 rows, produced a working `.onnx` file. Running it surfaced and fixed a real bug: the initial `to_onnx` call raised `RuntimeError: The model is using version 4 of domain 'ai.onnx.ml' not supported yet` until `target_opset={"": 18, "ai.onnx.ml": 3}` was added.
-- Model Registry registration and the SQL-callable `PREDICT`: **Target (not built yet)** — `register_to_snowflake` raises `NotImplementedError` by design; the real calls are commented out pending a live Snowflake session.
+- Registration in the Snowflake Model Registry is not part of the results: `register_to_snowflake` raises `NotImplementedError`.
+
+---
+
+### 7. Agents and CI/CD: the glue and guardrails
+
+```mermaid
+flowchart TD
+    PR["Pull request"] --> Clone["Zero-copy clone of Silver<br/>MARKET_AGENT_CI_&lt;run&gt;"]
+    Clone --> Build["dbt build in the clone"] --> Checks{"8 checks pass?"}
+    Checks -->|no| Doctor["Pipeline doctor (local model)<br/>read-only SQL + catalog search"]
+    Doctor --> Action{"runbook action"}
+    Action -->|dedupe / quarantine / rebuild| Fix["apply in the clone,<br/>re-run dbt + checks"]
+    Action -->|escalate| Human["human, with the diagnosis"]
+    Fix --> Report["report + production fix<br/>for approval"]
+    Checks -->|yes| Merge["merge"] --> Approve["human approves<br/>(GitHub environment)"]
+    Approve --> Deploy["dbt build on MARKET_AGENT<br/>+ post-deploy checks"]
+    Clone -.-> Drop["clone dropped"]
+```
+
+The model never writes a change: its reads go through the SQL guardrail (read-only, only the clone's tables, 20-row
+cap), and its only way to change anything is to name one of four human-written runbook actions, which refuse any
+database but `MARKET_AGENT_CI_*`. Production changes are proposed for approval, never applied by the agent.
+
+**What ran:** the clone, build, check and drop steps on Snowflake (clone 12 s, dbt 19/19, 8/8 checks, clone dropped),
+and the doctor on five injected faults plus a healthy control (5/5 injected faults diagnosed correctly: 4 fixed and verified in a clone, 1 escalated to a human, no false alarm, 0 production writes;
+[docs/doctor-eval-results.md](docs/doctor-eval-results.md)).
 
 ---
 
 ## Build requirements
 
 - Python 3.10+ (developed against 3.14.7; `str | None`-style union syntax and `zoneinfo` are used throughout, both of which need 3.10+)
-- A Snowflake account with Cortex Analyst, Cortex Search, and Cortex Agents enabled (region-gated — see `docs/PORTFOLIO_BRIEF.md`)
+- A Snowflake account (a trial works for everything except the Cortex features, which trial accounts block)
+- [Ollama](https://ollama.com/) with `qwen3:14b` and `nomic-embed-text` for the agents (a 12 GB GPU is enough)
 - dbt-snowflake (for `dbt/`)
 - A Kafka broker for the streaming path (any distribution; `docker run -p 9092:9092 apache/kafka` works for local testing)
 - A free [Alpaca](https://alpaca.markets/) account (market data + news)
 - A GCP project with a Cloud Storage bucket (batch ingest path)
-- Optionally, a [Langfuse](https://langfuse.com/) account (tracing) and a [PhysioNet](https://physionet.org/)-style credential is **not** needed here — that note applies to the companion Databricks project, not this repo
+- Optionally, a [Langfuse](https://langfuse.com/) account (tracing)
 
 Install Python dependencies (macOS/Linux/Windows all use the same command; there is no OS-specific packaging):
 
@@ -414,9 +449,11 @@ There is no build step — this is SQL run directly against Snowflake, plus plai
 | `python snowpark/train_anomaly_model.py` | Train + export the ONNX anomaly model locally |
 | `cd infra/local && docker compose up -d` | Start local Kafka + observability (Grafana localhost:3001, Prometheus localhost:9091, Jaeger localhost:16687) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:14318 python streaming/replay_sample_data.py` | Replay sample data with metrics flowing to Prometheus/Grafana |
-| `python -m glue.llm --check` | Check the Vertex AI client wiring without sending a request (no cost) |
 | `python -m glue.analyst "Which stock had the highest volume?"` | Ask the analyst glue agent (local model via Ollama, runs as ANALYST_AGENT) |
 | `python -m glue.eval_analyst` | Run the agent evaluation; writes docs/agent-eval-results.md |
+| `python -m glue.doctor --db MARKET_AGENT_CI_<name>` | Run the pipeline doctor on a clone with failing checks |
+| `python -m glue.eval_doctor` | Inject five faults into clones and score the doctor; writes docs/doctor-eval-results.md |
+| `python cicd/snowflake_ci.py clone\|checks\|drop\|verify` | The Snowflake CI/CD steps, runnable from a laptop |
 | `python -m pytest tests -q` | Unit tests |
 | `python docs/build_playbook.py` | Validate `knowledge/problem_catalog.yaml` and regenerate `docs/snowflake-e2e-agent-playbook.pdf` from it |
 
@@ -464,49 +501,36 @@ get_flagged_anomalies(symbol="AAPL")  # symbol is optional
 
 ---
 
-## Feature status
+## Verified results
 
-| Feature | Status |
-|---|---|
-| Live ingestion (Alpaca websocket → Kafka) | Partial — code complete, not run against a live feed/broker |
-| Offline sample data generation (bars/trades/symbols) | **Complete** — run locally, produces schema-valid, UTC-correct output |
-| Offline sample news generation | **Complete** — run locally, produces schema-valid output |
-| DLQ routing on invalid messages | **Complete** — verified locally with deliberately malformed rows |
-| Batch backfill (bars, symbols, news) | Stubbed — code complete, not run against live Alpaca/GCS |
-| Bronze → Silver (Streams + Tasks) | **Complete** — run on Snowflake (15 Oct 2026); all four MERGE tasks succeeded, Silver = Bronze exactly. See [docs/snowflake-results.md](docs/snowflake-results.md) |
-| Dynamic Table alternative for Silver | Stubbed — written, not wired into the active pipeline or run |
-| Silver → Gold (dbt) | **Complete** — `dbt build` on Snowflake, 19/19 models and tests pass (after fixing `dim_date`) |
-| Circuit-breaker flag (`is_suspect`) | **Complete** — computed in Gold on Snowflake; 0 bars flagged in the sample day |
-| Cortex Search (news RAG) | Blocked — Snowflake trial accounts can't use embedding functions (`EMBED_TEXT_*` not available for trial accounts) |
-| Native Semantic View | **Complete** — created on Snowflake; `SEMANTIC_VIEW()` queries return correct metrics |
-| YAML semantic model (Cortex Analyst) | Stubbed — written, not uploaded |
-| Cortex Agent (multi-tool routing) | Partial — agent object created on Snowflake; its Cortex tools can't run on a trial account |
-| Direct Cortex Analyst client | Stubbed — code complete, imports cleanly, not run against a live endpoint |
-| Cortex Agent client | Stubbed — same |
-| MCP server (3 tools) | Stubbed — imports cleanly; tool functions don't yet include a standalone news-search tool despite the module docstring mentioning one — see `docs/restructure-proposal.md` |
-| Streamlit chat UI | Stubbed — compiles, not run |
-| FastAPI service | Stubbed — compiles, not run |
-| RBAC + Row Access Policy | **Complete** — applied and tested on Snowflake across roles, secondary roles and session timezones; a secondary-role leak was found and fixed |
-| Resource Monitor + statement timeout | **Complete** — applied: account cap `TRIAL_SPEND_CAP` (110 credits) and `ANALYST_AGENT_MONITOR` |
-| Append-only audit log | Partial — table and grants created on Snowflake; not yet written to by an agent call |
-| ONNX anomaly-detection model (train + export) | **Complete** — run locally against sample data, produces a working `.onnx` file |
-| Model Registry registration | Target (not built yet) — function raises `NotImplementedError` by design |
-| Orchestration (Dagster) | Stubbed — asset graph and schedules validate locally (`dagster definitions validate`); not run against Snowflake |
-| Infrastructure as code (Terraform) | Stubbed — `terraform validate` passes against the real providers; not applied |
-| CI (GitHub Actions) | Written — same checks pass locally; first run happens on the next push |
-| CD (approval-gated deploy) | Stubbed — written, not run (needs secrets and a `production` environment) |
-| Monitoring alerts + runbook (Snowflake side) | Stubbed — written, not created in Snowflake |
-| Observability outside Snowflake (OpenTelemetry, Prometheus, Grafana, Jaeger) | **Complete locally** — replayed data reached Prometheus and matched Kafka's own offsets; 4 alert rules load; dashboard renders |
-| Vertex AI (Model Garden) for glue agents | Partial — client and Terraform validate; no model call made (needs enabling in Model Garden + a budget) |
-| Automated test suite (pytest) | Partial — 23 guardrail unit tests run in CI; no pipeline tests yet |
-| Analyst glue agent (local LLM, guardrailed text-to-SQL) | **Complete** — qwen3:14b via Ollama; 13/15 on the reference eval, 8/8 attacks blocked, 0 unsafe executions. See [docs/agent-eval-results.md](docs/agent-eval-results.md) |
+| Area | Result | Evidence |
+|---|---|---|
+| Bronze → Silver → Gold on Snowflake | dbt 19/19 pass, 9,795 rows reconciled, six defects found and fixed | [snowflake-results.md](docs/snowflake-results.md) |
+| 15-minute delay policy | Correct across 12 role × secondary-role × timezone combinations; a real-time leak through secondary roles found and fixed | [snowflake-results.md §5](docs/snowflake-results.md) |
+| Semantic view | Governed metrics resolve correctly through `SEMANTIC_VIEW()` | [snowflake-results.md §4](docs/snowflake-results.md) |
+| Spend guardrails | 110-credit resource monitor and agent warehouse monitor active; full build used 0.49 credits | [snowflake-results.md](docs/snowflake-results.md) |
+| Kafka + observability (OTel, Prometheus, Grafana, Jaeger) | Replay matched Kafka offsets exactly (15,900 trades, 4,001 bars); 4 alert rules; caught a validation gap, 3/3 rejected after the fix | [stack-results.md](docs/stack-results.md) |
+| Analyst agent (local model) | 13/15 reference questions, 8/8 attacks blocked, 0 unsafe executions, 2.3 s median | [agent-eval-results.md](docs/agent-eval-results.md) |
+| Pipeline doctor (local model) | 5/5 injected faults diagnosed correctly: 4 fixed and verified in a clone, 1 escalated to a human, no false alarm, 0 production writes | [doctor-eval-results.md](docs/doctor-eval-results.md) |
+| Snowflake CI steps | Clone 12 s, dbt 19/19 and 8/8 checks in the clone, clone dropped | `cicd/snowflake_ci.py` |
+| Unit tests | 36 (SQL guardrail, doctor safety rules), run in CI | `tests/` |
+| ONNX anomaly model | Trained on 1,950 sample bars and exported | `snowpark/train_anomaly_model.py` |
+
+Code in the repo that is not part of these results: the live Alpaca producer and backfills (need an Alpaca key), the
+Cortex Analyst, Cortex Agent and Cortex Search paths (blocked on trial accounts), the Streamlit and FastAPI front ends,
+Snowflake alerts, `terraform apply`, and Dagster runs against Snowflake.
 
 ---
 
 ## Testing
 
-There is no pytest suite in this repo yet (tracked as a known gap in `docs/PORTFOLIO_BRIEF.md`). The testing that exists today:
-
-- **dbt tests**: `cd dbt && dbt test` runs the schema tests in `dbt/models/marts/schema.yml` (`unique`, `not_null`, `relationships`) and the singular test `dbt/tests/assert_bar_ohlc_consistency.sql`.
-- **Manual verification queries**: `sql/08_validation/validation_queries.sql` holds a hand-written SQL twin of every `verified_query` in the semantic model, meant to be run and diffed against the agent's answer by hand.
-- **Ad hoc script verification**: the Python scripts under `streaming/` and `snowpark/` were exercised manually during development (`python -m py_compile`, direct execution against sample data) rather than through an automated suite — see the Status notes in each flow section above for exactly what was run.
+- **Unit tests** (`python -m pytest tests -q`, run in CI): 23 for the SQL guardrail (writes, stacked statements,
+  disallowed tables, comment tricks) and 13 for the pipeline doctor's safety rules (refuses production, runbook SQL only
+  targets the clone, the model can only name runbook actions).
+- **dbt tests**: `unique`, `not_null` and `relationships` in `dbt/models/marts/schema.yml`, plus the singular
+  `assert_bar_ohlc_consistency.sql`; 19/19 pass on Snowflake.
+- **Snowflake checks** (`cicd/snowflake_ci.py`): delay policy attached to both fact tables, Silver = Gold counts,
+  no duplicate bars, OHLC rules, bars inside the regular session. Run in the clone for every pull request and on
+  production after each deploy.
+- **Agent evaluations**: `glue/eval_analyst.py` (15 questions, 8 attacks) and `glue/eval_doctor.py` (5 injected
+  faults, 1 healthy control).

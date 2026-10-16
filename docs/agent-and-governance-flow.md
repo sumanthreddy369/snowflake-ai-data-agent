@@ -139,7 +139,8 @@ the warehouse at 100%). Neither of those is a data-access rule — they bound
 cost and runaway-query risk, which is a different failure mode than a wrong
 or malicious question, and both are described in `sql/09_guardrails/cost_and_access_guardrails.sql`.
 
-**Status: Stubbed** — the policy, the roles, the warehouse, and the resource
-monitor are all written and internally consistent, but none has been applied
-against a live Snowflake account, so this document describes intended
-behavior rather than observed behavior.
+**What ran:** the policy, the roles, the agent warehouse and the resource
+monitors are applied on a Snowflake trial account. The delay policy was
+tested across 12 role × secondary-role × timezone combinations, which found
+and fixed a real-time leak through secondary roles
+([snowflake-results.md](snowflake-results.md) §5).

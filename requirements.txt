@@ -36,8 +36,6 @@ opentelemetry-sdk
 opentelemetry-exporter-otlp-proto-http
 opentelemetry-instrumentation-fastapi
 
-# glue/ (Claude on Vertex AI Model Garden for the glue agents; off by default)
-anthropic[vertex]
 sqlglot      # glue/guardrails.py parses LLM-written SQL before it runs
 
 # tests/

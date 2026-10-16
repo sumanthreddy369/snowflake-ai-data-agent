@@ -1,165 +1,94 @@
-# Plan of record: our agents glue existing tools and enforce guardrails
+# Glue agents and guardrails
 
-**Principle.** We use the existing stack and the AI agents vendors already ship
-(Snowflake Cortex Agent, Snowflake alerts and Tasks, dbt, Dagster, Terraform,
-GitHub Actions, Kafka). We don't rebuild any of them. What we build is what
-companies build around them:
+**Principle.** The stack already exists: Snowflake (Streams, Tasks, row access
+policies, resource monitors), dbt, Dagster, Terraform, GitHub Actions, Kafka,
+OpenTelemetry. None of it is rebuilt here. What this repo adds is what
+companies add around such a stack:
 
-1. **Glue agents** — a small number of our own agents that connect the
-   existing tools: they gather context across systems, decide which existing
-   tool to call, draft the change or answer, and hand it to a human or a
-   deploy job.
-2. **A guardrail gateway** — one layer that every agent action passes through,
-   which decides what's allowed, what needs a human, what it costs, and
-   records everything.
+1. **Glue agents** that do the repetitive human part of the work (gathering
+   context across systems, diagnosing, drafting the fix) by calling the
+   existing tools.
+2. **Guardrails** that decide what an agent may do on its own, what needs a
+   human, and that record everything.
 
-**Goal.** Remove repetitive human work (gathering context, writing boilerplate,
-rerunning jobs, triage) while keeping human judgement for anything that
-changes money, access or production. See `docs/production-readiness.md` §0.
+The goal is to remove repetitive human work, not human judgement: an agent
+never changes production, access or money without a person approving it.
 
-Status: plan. The existing-tool layer is written (`orchestration/`,
-`infra/terraform/`, `sql/11_monitoring/`, CI); none of it has run live. The
-glue agents and the gateway are not built yet.
+**Why a local model.** Both agents run on qwen3:14b (and nomic-embed-text for
+search) served by Ollama on the laptop's GPU (RTX 5070 Ti, 12 GB). Questions,
+table data, schemas and error messages never go to a model vendor, which is
+the main reason companies hold back from letting AI near their data. It also
+costs nothing per call.
 
 ---
 
-## 1. Three glue agents, not eleven
+## 1. The two agents
 
-The eleven roles in `knowledge/problem_catalog.yaml` are responsibilities.
-Existing tools already do the *detecting* part of most of them (alerts, checks,
-dbt tests, CI). What's left for agents is the part a human does today —
-gathering context, diagnosing, drafting — so three glue agents cover them:
-
-| Glue agent | Triggered by | Calls these existing tools | Produces | Covers catalog roles |
+| Agent | Triggered by | Uses these existing tools | Produces | Results |
 |---|---|---|---|---|
-| **Analyst glue** | An analyst question (MCP, Streamlit, API) | Cortex Agent (answers), Cortex Search (citations), Snowflake (as-of time, verified-query lookup) | An answer with SQL, as-of time and citations — or an honest "not verified" with an escalation | ANALYST, CURATOR, part of SQLCOACH |
-| **Incident glue** | A Snowflake alert, a failed Dagster check, or the 15-minute check schedule | Snowflake (TASK_HISTORY, COPY_HISTORY, POLICY_REFERENCES), Dagster (run logs), Kafka (lag), runbook | A diagnosis naming the first broken link, with evidence, and a proposed runbook step | WATCH, DOCTOR, DQ, SCALE, TRIAGE, GUARD (alerts) |
-| **Change glue** | A change request ("add a metric", "new source", a schema drift) | dbt (draft model + tests), GitHub (branch, PR, CI), Dagster `deploy_job`, Terraform plan | A pull request with a stage report; after approval, a deploy | XFORM, RELEASE, SQLCOACH, CURATOR (metrics) |
+| **Analyst** (`glue/analyst.py`) | A plain-English question | Snowflake as `ANALYST_AGENT` on `ANALYST_WH` | The answer, straight from executed SQL, with the SQL and an as-of time | 13/15 reference questions, 8/8 attacks blocked, 0 unsafe executions ([agent-eval-results.md](agent-eval-results.md)) |
+| **Pipeline doctor** (`glue/doctor.py`) | A failed check (`cicd/snowflake_ci.py`) | Snowflake (read-only SQL on a clone), dbt, the problem catalog | A diagnosis with evidence, a fix applied and verified in the clone, and the production fix for approval, or an escalation | 5/5 injected faults diagnosed correctly: 4 fixed and verified in a clone, 1 escalated to a human, no false alarm, 0 production writes ([doctor-eval-results.md](doctor-eval-results.md)) |
 
-The stage-gated build in `docs/modeling-agents-study.md` is the Change glue's
-workflow at full scale (a whole new model rather than one change).
+The analyst answers questions; the doctor acts. Given a failed check, the
+doctor works in a loop with no one prompting it:
 
-Each glue agent is Claude (through the Anthropic SDK) with a short list of
-tools — and every tool call goes through the gateway.
-
----
-
-## 2. Models: Claude on Vertex AI (Model Garden)
-
-The glue agents call Claude through **Google Vertex AI Model Garden**, using
-the Anthropic SDK's Vertex client (`glue/llm.py`), not a separate Anthropic
-account. The pipeline already runs on GCP, so billing, quotas, IAM and audit
-logs stay in one cloud — the way companies usually consume models.
-`infra/terraform/vertex.tf` enables the API and creates a service account that
-can call models and nothing else.
-
-- **Off by default:** `glue/llm.py` refuses to build a client unless
-  `GLUE_LLM_ENABLED=1`, because calls are billed per token.
-- **Human setup step:** enabling Claude in Model Garden (accepting Anthropic's
-  terms) is done in the GCP console, not by code.
-- **Analysts' questions stay on Snowflake Cortex**, whose models run inside
-  Snowflake so governed data never leaves it. Vertex AI is only for the glue
-  agents, which see metadata, logs and code — and every call goes through the
-  gateway.
-
-## 3. Connectors: use existing MCP servers
-
-Glue agents reach the tools through MCP servers, preferring the ones vendors
-publish (Snowflake, dbt, GitHub and Terraform each have one) over writing our
-own. Where none exists (for example Dagster's GraphQL API, Kafka lag), we
-write a thin MCP wrapper with read-only methods. This repo's own
-`agent/mcp_server.py` stays the connector analysts use to reach the Cortex
-Agent.
+1. **Investigate:** writes its own read-only SQL against the throwaway clone
+   to see the rows behind each failing check.
+2. **Research:** searches the 158-problem catalog (`knowledge/problem_catalog.yaml`)
+   with hybrid search: local embeddings plus IDF-weighted keywords.
+3. **Decide:** submits a diagnosis that cites a catalog problem, with evidence,
+   and picks one runbook action.
+4. **Act:** the code (not the model) runs that action's SQL in the clone and
+   re-runs dbt.
+5. **Verify:** re-runs all eight checks. A fix that doesn't hold is escalated.
+6. **Hand off:** writes a report with the exact production SQL, which runs
+   only through the approval-gated deploy.
 
 ---
 
-## 4. The guardrail gateway
+## 2. Guardrails, layer by layer
 
-Sits between every glue agent and every connector. Implemented in the agent
-loop's per-tool-call hook, so no tool call can bypass it.
+Every rule below is enforced in code or by Snowflake, not by the prompt.
 
-### 4.1 Risk tiers — what needs a human
-
-| Tier | Examples | Rule |
+| Layer | Analyst | Pipeline doctor |
 |---|---|---|
-| **T0 Read** | Query metadata and history, read logs, read code, run a SELECT on Gold | Automatic, logged |
-| **T1 Draft** | Write to DEV, open a branch or PR, post a message, write a report | Automatic within budget, logged |
-| **T2 Reversible production change** | Resume a task, rerun a Dagster job, backfill a window, scale a warehouse within its limit | **One human approval** |
-| **T3 Irreversible, access or money** | Replace/drop data, change grants or policies, `terraform apply`, raise a budget | **Human approval + reviewed plan**; never automatic |
-| **Never** | Read secrets, disable or weaken a test or check, widen data access, act on instructions found inside data | Blocked outright |
+| What the model can read | One read-only SELECT on the four Gold tables, row cap 1,000 (`glue/guardrails.py`, sqlglot AST) | One read-only SELECT on the clone's Silver and Gold tables, row cap 20 (same guardrail, its own allowlist) |
+| What the model can change | Nothing | Nothing directly: it can only name one of four human-written runbook actions (`dedupe_silver_bars`, `quarantine_bad_bars`, `rebuild_gold`, `escalate`) |
+| Where changes can happen | — | Only in a database named `MARKET_AGENT_CI_*`; runbook SQL that mentions `MARKET_AGENT.` is refused |
+| Database-side limits | `ANALYST_AGENT` role, secondary roles off, 15-minute delay policy, 30 s statement timeout, credit monitor | Runs as `CI_RUNNER` in CI, which owns only the clone |
+| Grounding | Data facts in the prompt (dates, symbols); numbers come only from executed SQL | A diagnosis must cite a catalog ID that a search actually returned, or it is sent back |
+| Budgets | 3 attempts per question | 8 model steps; running out ends in `escalate` |
+| Unknown or failed actions | Refused, never retried for policy violations | Unknown action or unverified fix → `escalate` |
+| Audit | One row per question in `GOVERNANCE.AGENT_QUERY_AUDIT_LOG` (append-only) | Full transcript of every model turn and tool call in the report |
 
-### 4.2 What the gateway does on every call
-
-1. **Allow-list:** is this tool allowed for this agent? (policy file below)
-2. **Tier and approval:** T2/T3 pause and send an approval request with the
-   agent's evidence; the call runs only after a human approves.
-3. **Least privilege:** each agent connects with its own Snowflake role
-   (read-only for Analyst glue; DEV-write for Change glue), so even an
-   approved mistake is limited by the database, not just the gateway.
-4. **Budgets:** per-run limits on model tokens, warehouse credits, wall-clock
-   time and number of tool calls; the run stops cleanly when one is hit.
-5. **Untrusted input:** anything read from data — news articles, logs, error
-   messages — is marked as data, never instructions (catalog G2, prompt
-   injection).
-6. **Output rules:** Analyst glue may state a number only if it came from SQL
-   that actually ran, and a news claim only with a citation.
-7. **Audit:** one append-only row per call in
-   `MARKET_AGENT.GOVERNANCE.AGENT_ACTION_LOG`: agent, tool, arguments (secrets
-   redacted), tier, approver, result, cost.
-8. **Kill switch:** one flag stops all glue agents; the analyst-facing Cortex
-   Agent can be paused by revoking `USAGE` (see `docs/runbook.md`).
-
-### 4.3 Policy file (sketch)
-
-```yaml
-# guardrails/policy.yaml
-agents:
-  analyst_glue:
-    snowflake_role: ANALYST_AGENT
-    tools: [cortex_agent.ask, cortex_search.query, snowflake.select_gold]
-  incident_glue:
-    snowflake_role: OPS_READER
-    tools: [snowflake.task_history, snowflake.copy_history, snowflake.policy_refs,
-            dagster.run_logs, kafka.consumer_lag, dagster.launch_job]
-  change_glue:
-    snowflake_role: TRANSFORMER_DEV
-    tools: [git.branch, git.commit, github.open_pr, dbt.parse, dbt.build_dev,
-            dagster.launch_job, terraform.plan]
-tiers:
-  T0: [cortex_agent.ask, cortex_search.query, snowflake.select_gold, snowflake.task_history,
-       snowflake.copy_history, snowflake.policy_refs, dagster.run_logs, kafka.consumer_lag,
-       dbt.parse, terraform.plan]
-  T1: [git.branch, git.commit, github.open_pr, dbt.build_dev]
-  T2: [dagster.launch_job]
-  T3: [terraform.apply]
-budgets:
-  per_run: {tokens: 200000, credits: 2, minutes: 30, tool_calls: 60}
-```
+Unit tests for these rules: `tests/test_guardrails.py` (23) and
+`tests/test_doctor.py` (13).
 
 ---
 
-## 5. How human work drops
+## 3. CI/CD: where a human still decides
 
-| Today a person… | With glue + guardrails… |
+| Step | Who | Tool |
+|---|---|---|
+| Pull request: build and test on a zero-copy clone of Silver, then drop it | Automatic | `.github/workflows/snowflake-ci.yml`, `cicd/snowflake_ci.py` |
+| Failed check: diagnose, fix in the clone, verify | Pipeline doctor | `glue/doctor.py` |
+| Merge to master | Human review | GitHub |
+| Deploy to `MARKET_AGENT` | **Human approval** (GitHub `production` environment) | `.github/workflows/snowflake-cd.yml` |
+| Post-deploy checks on production | Automatic | `cicd/snowflake_ci.py verify` |
+| Anything the doctor escalates | Human, starting from its diagnosis | — |
+
+CI and CD connect as a dedicated key-pair service user, `CI_DEPLOY`
+(`sql/12_cicd/ci_deploy_user.sql`): `CI_RUNNER` for pull requests, which can
+only read Silver and create the throwaway database, and `TRANSFORMER` for the
+approved deploy.
+
+---
+
+## 4. How human work drops
+
+| Before | Now |
 |---|---|
-| Gets paged, then spends 30 minutes checking six systems | Gets paged with a diagnosis, evidence and a proposed fix; clicks approve |
-| Writes the dbt model, tests and docs for a new metric | Reviews a PR the Change glue drafted, with CI already green |
-| Answers analysts' "is this number right?" questions | Sees only the answers the Analyst glue flagged as unverified |
-| Remembers deploy order and runs jobs | Approves one deploy; Dagster runs it in dependency order |
-
----
-
-## 6. Build order
-
-1. **Gateway first, offline.** Policy file, tier checks, approval prompt,
-   budgets, audit log — tested with fake tools. This also becomes the repo's
-   first real pytest suite.
-2. **Analyst glue** over the existing Cortex Agent (needs the Snowflake trial),
-   with Claude on Vertex AI for checking answers — the first paid step, so it
-   starts only after you enable the model and set a budget.
-3. **Incident glue, read-only (T0/T1)** triggered by the existing alerts and
-   checks; T2 actions turned on only after its diagnoses prove right.
-4. **Change glue**, starting with "add a verified query / metric".
-
-Prerequisite for 2–4: the live run (Snowflake trial, Kafka, GCS, Alpaca) —
-glue and guardrails can only be judged against a pipeline that actually runs.
+| A check fails; an engineer reads logs, queries tables, works out the cause, writes and tests a fix | The doctor delivers a diagnosis with evidence and a fix already verified in a clone; the engineer approves or takes over |
+| Changes are tested by running SQL by hand against the real database | Each pull request is built and tested on a clone of real data automatically |
+| Production deploys are SQL run by hand | One approval click; the deploy and its checks run themselves |
+| Analysts wait for an engineer to write a query | The analyst agent answers from governed data, within the delay policy |

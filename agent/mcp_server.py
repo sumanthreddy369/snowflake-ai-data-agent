@@ -1,6 +1,6 @@
 """
 A small MCP server exposing this project's governed data access as tools any
-MCP-aware client (Claude, another agent, etc.) can call -- the "MCP" step in
+MCP-aware client (an IDE, another agent, etc.) can call -- the "MCP" step in
 the architecture: Cortex Agents -> MCP -> AI Data Assistant. This is a
 custom, standalone MCP server (FastMCP) rather than Snowflake's own managed
 MCP server (a Native Apps feature, GA August 2026, that would require

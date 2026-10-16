@@ -9,8 +9,10 @@ ourselves:
 - **Guardrails** — the checks, policies, limits and approvals that keep the
   tools (and the AI agent) from doing damage.
 
-Status: everything below is written; Terraform and the Dagster graph are
-validated locally; none of it has run against live Snowflake, GCP or Kafka yet.
+What has run: the Snowflake layers, governance and dbt on a trial account
+(docs/snowflake-results.md), the Kafka + observability stack locally
+(docs/stack-results.md), and both agents on a local model
+(docs/agent-eval-results.md, docs/doctor-eval-results.md).
 
 ---
 
@@ -63,7 +65,7 @@ can't be undone, it needs both.
 | AI agent | **Snowflake Cortex Agent** (not a custom agent) | `sql/10_agent`, MCP server, Streamlit, FastAPI | Row access policy, read-only agent role, audit log, statement timeout |
 | Monitoring (inside Snowflake) | Snowflake ALERTs + Dagster asset checks | `sql/11_monitoring`, `orchestration/checks.py` | Paging on stalls, policy loss, task failures, staleness |
 | Monitoring (outside Snowflake) | **OpenTelemetry, Prometheus, Grafana, Jaeger** | `streaming/telemetry.py`, `api/main.py`, `infra/local/` | Alerts on producer stalls, DLQ rate, Kafka lag, event lag |
-| Models for the glue agents | **Claude on Vertex AI (Model Garden)** | `glue/llm.py`, `infra/terraform/vertex.tf` | Off by default; calls only through the guardrail gateway |
+| Models for the glue agents | **Local model: qwen3:14b + nomic-embed-text on Ollama** | `glue/analyst.py`, `glue/doctor.py` | Runs on the laptop's GPU, so no data, schema or error text goes to a model vendor |
 | On-call | Email / webhook (PagerDuty, Slack) | Notification integration | `docs/runbook.md` |
 | Data observability | Built in for now (see §6) | — | dbt tests, reconciliation, freshness |
 | Data catalog | dbt docs + Dagster lineage for now (see §6) | — | Column descriptions in `schema.yml` |
@@ -125,18 +127,25 @@ Google 7.x). Not yet applied.
 
 ## 4. CI/CD
 
-**CI** (`.github/workflows/ci.yml`, every push and pull request):
-compile all Python; run the sample-data generators; validate the problem
-catalog and build the playbook; `dbt parse`; load and validate the Dagster
-graph; `terraform fmt -check` and `terraform validate`.
+**CI** (`.github/workflows/ci.yml`, every push and pull request): compile
+all Python; run the sample-data generators; validate the problem catalog and
+build the PDF and Word documents; run the 36 unit tests; validate the local
+observability stack; `dbt parse`; load the Dagster graph; `terraform fmt`,
+`init` and `validate`.
 
-**CD** (`.github/workflows/deploy.yml`, manual trigger only): runs in a GitHub
-`production` environment, which should require a reviewer's approval. Steps:
-`terraform plan` → (approval) → `terraform apply` → Dagster `deploy_job`.
-Requires repository secrets (listed in the workflow). Not yet run.
+**Snowflake CI** (`.github/workflows/snowflake-ci.yml`, pull requests that
+touch the data model): zero-copy clone of Silver into
+`MARKET_AGENT_CI_<run id>` → `dbt build` in the clone → eight governance and
+data checks → the clone is dropped, even if a step fails. Run from a laptop
+against Snowflake: clone 12 s, dbt 19/19, checks 8/8, clone dropped.
 
-Still missing: a pytest suite (README "Target"), so CI checks that things load
-and parse, not yet that they behave correctly.
+**Snowflake CD** (`.github/workflows/snowflake-cd.yml`, merges to master):
+runs in the GitHub `production` environment, so it waits for a reviewer's
+approval; then `dbt build` on `MARKET_AGENT` as `TRANSFORMER` and the same
+eight checks against production.
+
+**Infrastructure deploy** (`.github/workflows/deploy.yml`, manual): `terraform
+plan` → approval → `terraform apply` → Dagster `deploy_job`.
 
 ---
 
@@ -176,7 +185,7 @@ by a free local stack (`infra/local/docker-compose.yml`):
 
 Verified locally: replaying sample data with one malformed row produced 100
 bar and 300 trade messages and 1 DLQ message in Prometheus, matching Kafka's
-own topic offsets exactly; the stall alert went to pending once the replay
+own topic offsets exactly; the stall alert armed once the replay
 stopped during market hours; API metrics and status codes arrived from a
 running FastAPI instance.
 
@@ -198,7 +207,7 @@ so nothing here would be thrown away.
 
 ---
 
-## 6.1 Tools considered and not adopted (yet)
+## 6.1 Tools considered and not adopted
 
 Adding every well-known tool would duplicate jobs and add cost. Each was
 checked against what's already here:
@@ -210,8 +219,8 @@ checked against what's already here:
 | BlazeMeter | Later | Useful for load-testing the API once live (catalog I7); free k6 or Locust are alternatives; load tests spend Snowflake credits |
 | Datadog, Dynatrace | Not adopted | Paid; same job as OpenTelemetry + Prometheus + Grafana; reachable later through the OTel Collector |
 | Splunk | Not adopted | Paid beyond a small free tier; audit logs already live in Snowflake and can be forwarded via OTel later |
-| Amazon Bedrock | Not adopted | Vertex AI chosen instead: the project already runs on GCP; one model platform is enough |
-| NVIDIA NIM | Not adopted | Needs GPU setup; Ollama (already installed) is simpler if a local model is ever needed |
+| Amazon Bedrock, Vertex AI Model Garden | Not adopted | Hosted models would send schema, logs and query results to a vendor; the agents run on a local model instead |
+| NVIDIA NIM | Not adopted | Ollama serves the same local models with less setup |
 
 ---
 
