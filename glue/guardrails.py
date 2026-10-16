@@ -54,8 +54,11 @@ def _qualified(table: exp.Table) -> str:
     return ".".join(parts).upper()
 
 
-def check_sql(sql: str, row_limit: int = DEFAULT_ROW_LIMIT) -> CheckedSql:
-    """Validate LLM-proposed SQL; return the exact statement to run, or raise."""
+def check_sql(sql: str, row_limit: int = DEFAULT_ROW_LIMIT,
+              allowed_tables: frozenset[str] = ALLOWED_TABLES) -> CheckedSql:
+    """Validate LLM-proposed SQL; return the exact statement to run, or raise.
+    `allowed_tables` defaults to the analyst's Gold tables; the pipeline doctor
+    passes the Silver and Gold tables of its throwaway clone instead."""
     text = (sql or "").strip().rstrip(";").strip()
     if not text:
         raise GuardrailViolation("EMPTY", "no SQL was proposed")
@@ -80,13 +83,13 @@ def check_sql(sql: str, row_limit: int = DEFAULT_ROW_LIMIT) -> CheckedSql:
         name = _qualified(table)
         if not name or name in cte_names:
             continue
-        if name not in ALLOWED_TABLES:
+        if name not in allowed_tables:
             raise GuardrailViolation(
                 "TABLE_NOT_ALLOWED",
-                f"{name} is not an allowed source; use fully qualified Gold tables: {', '.join(sorted(ALLOWED_TABLES))}")
+                f"{name} is not an allowed source; use fully qualified tables: {', '.join(sorted(allowed_tables))}")
         tables.append(name)
     if not tables:
-        raise GuardrailViolation("NO_ALLOWED_TABLE", "the query must read from at least one Gold table")
+        raise GuardrailViolation("NO_ALLOWED_TABLE", "the query must read from at least one allowed table")
 
     # Row cap: wrap rather than edit, so the model's own LIMIT/ORDER BY is untouched.
     capped = f"SELECT * FROM (\n{tree.sql(dialect='snowflake')}\n) LIMIT {int(row_limit)}"
